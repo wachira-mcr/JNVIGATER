@@ -3560,8 +3560,9 @@ HTML_TEMPLATE = r"""
                 </div>
 
                 <div>
-                    <label style="font-size:0.85rem; color:#94a3b8; display:block; margin-bottom:6px;">Target DB Site (อัปโหลดไปที่ไซต์ใด):</label>
-                    <select class="form-control" id="fndUploadTargetSite"></select>
+                    <label style="font-size:0.85rem; color:#94a3b8; display:block; margin-bottom:6px;">Target DB Site (ปลายทาง):</label>
+                    <select class="form-control" id="fndUploadTargetSite" style="width:100%; background:#1e293b; color:#f8fafc; border:1px solid #38bdf8; padding:8px 10px; border-radius:4px; font-weight:600;"></select>
+                    <div style="font-size:0.75rem; color:#38bdf8; margin-top:4px;">⚡ ระบบเลือกไซต์ที่กำลังเชื่อมต่ออยู่ให้เป็นค่าเริ่มต้นโดยอัตโนมัติ</div>
                 </div>
             </div>
             <div class="modal-footer" style="justify-content: flex-end; display:flex; gap:8px;">
@@ -5471,21 +5472,24 @@ HTML_TEMPLATE = r"""
             let folderName = files[0].webkitRelativePath ? files[0].webkitRelativePath.split('/')[0] : 'Selected_Folder';
             document.getElementById('fndUploadFolderName').value = folderName;
 
+            await loadFndProfilesDropdown();
+
             const targetSelect = document.getElementById('fndUploadTargetSite');
             targetSelect.innerHTML = '';
             
-            try {
-                const res = await fetch('/api/get_saved_profiles');
-                const data = await res.json();
-                if (data.success && data.profiles) {
-                    for (const [key, profile] of Object.entries(data.profiles)) {
-                        const opt = document.createElement('option');
-                        opt.value = key;
-                        opt.textContent = `${key}`;
-                        targetSelect.appendChild(opt);
-                    }
-                }
-            } catch (err) {}
+            const activeKey = getActiveSessionKey();
+            
+            cachedProfilesList.forEach(k => {
+                const opt = document.createElement('option');
+                opt.value = k;
+                opt.textContent = (k === activeKey) ? `${k} (⚡ เชื่อมต่ออยู่)` : k;
+                if (k === activeKey) opt.selected = true;
+                targetSelect.appendChild(opt);
+            });
+
+            if (activeKey) {
+                targetSelect.value = activeKey;
+            }
 
             document.getElementById('fndUploadModal').style.display = 'flex';
         }
@@ -5497,7 +5501,7 @@ HTML_TEMPLATE = r"""
 
         async function submitFndUpload() {
             if (!pendingFndFiles || pendingFndFiles.length === 0) return;
-            const targetSite = document.getElementById('fndUploadTargetSite').value;
+            const targetSite = document.getElementById('fndUploadTargetSite').value || getActiveSessionKey();
             if (!targetSite) {
                 alert('โปรดเลือก Target DB');
                 return;
