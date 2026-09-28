@@ -905,7 +905,9 @@ def describe_table():
 def search_concurrent():
     search = request.args.get("search", "").strip()
     search_type = request.args.get("type", "ALL").strip().upper()
-    limit = int(request.args.get("limit", 100))
+    days_str = request.args.get("days", "").strip()
+    limit = int(request.args.get("limit", 200))
+    days = int(days_str) if (days_str and days_str.isdigit()) else None
     
     if not search and search_type == "ALL":
         return jsonify({"success": True, "count": 0, "items": [], "message": "Search keyword empty"})
@@ -3262,6 +3264,11 @@ HTML_TEMPLATE = r"""
                             <option value="PKG_NAME">📦 Package / Executable</option>
                         </select>
                         <input type="text" id="concSearchInput" style="flex:1;" placeholder="พิมพ์คำค้นหา (เช่น REP - AR Gold Invoice Form, PTAR_GOLD_INVOICE_2, 17486162)..." onkeydown="if(event.key==='Enter') searchConcurrent()">
+                        <div style="display:flex; align-items:center; gap:4px; background:var(--bg-dark); padding:2px 8px; border-radius:4px; border:1px solid var(--panel-border);">
+                            <label style="font-size:0.8rem; color:#94a3b8; font-weight:500;">ย้อนหลัง:</label>
+                            <input type="number" id="concDaysInput" style="width:65px; height:28px; padding:2px 6px; text-align:center; background:#1e293b; color:#f8fafc; border:1px solid #334155; border-radius:4px;" value="30" min="0" title="ระบุจำนวนวันย้อนหลัง (เช่น 7, 30, 90, 365 หรือใส่ 0 เพื่อหาไม่จำกัดวัน)" onkeydown="if(event.key==='Enter') searchConcurrent()">
+                            <span style="font-size:0.78rem; color:var(--text-muted);">วัน</span>
+                        </div>
                         <button class="btn" onclick="searchConcurrent()">🔍 ค้นหา Concurrent</button>
                         <div class="dropdown" style="display:inline-block; position:relative; z-index:1000;">
                             <button class="btn" style="background:linear-gradient(135deg, #0284c7, #0369a1); border:1px solid #38bdf8; font-weight:600; cursor:pointer;" onclick="toggleFndDropdown(event)" title="จัดการ FNDLOAD">🚀 Gen FNDLOAD ▼</button>
@@ -4776,6 +4783,7 @@ HTML_TEMPLATE = r"""
         async function searchConcurrent() {
             const query = document.getElementById('concSearchInput').value.trim();
             const searchType = document.getElementById('concSearchType').value;
+            const days = document.getElementById('concDaysInput') ? document.getElementById('concDaysInput').value.trim() : '';
             const wrapper = document.getElementById('concTableWrapper');
             const stats = document.getElementById('concStats');
 
@@ -4788,11 +4796,14 @@ HTML_TEMPLATE = r"""
             wrapper.innerHTML = '<div style="padding: 40px; text-align: center;"><span class="loading-spinner"></span> Searching Concurrent Requests...</div>';
 
             try {
-                const res = await fetch(`/api/concurrent/search?search=${encodeURIComponent(query)}&type=${searchType}`);
+                let url = `/api/concurrent/search?search=${encodeURIComponent(query)}&type=${searchType}`;
+                if (days) url += `&days=${encodeURIComponent(days)}`;
+                const res = await fetch(url);
                 const data = await res.json();
 
                 if (data.success) {
-                    stats.textContent = `Found ${data.count} Concurrent Requests`;
+                    const daysLabel = (days && parseInt(days) > 0) ? ` (ย้อนหลัง ${days} วัน)` : ' (ไม่จำกัดวัน)';
+                    stats.textContent = `Found ${data.count} Concurrent Requests${daysLabel}`;
                     renderConcGrid(data.items);
                 } else {
                     stats.textContent = "Query Error";
