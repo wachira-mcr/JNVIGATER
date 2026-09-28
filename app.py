@@ -7503,7 +7503,7 @@ def api_fndload_generate():
     profiles_data = load_saved_profiles()
     profiles = profiles_data.get("profiles", {})
     
-    def resolve_jdbc(key):
+    def resolve_info(key):
         p = profiles.get(key)
         if not p:
             global active_session_key, db_sessions
@@ -7512,17 +7512,21 @@ def api_fndload_generate():
             elif key in db_sessions:
                 p = db_sessions[key]
         if not p:
-            return ""
+            return "", "apps", "apps"
         host = p.get("host", "")
         port = p.get("port", 1521)
+        user = p.get("user", "apps")
+        pw = p.get("password", "apps")
         if p.get("service_name"):
-            return f"{host}:{port}/{p.get('service_name')}"
+            jdbc = f"{host}:{port}/{p.get('service_name')}"
         elif p.get("sid"):
-            return f"{host}:{port}:{p.get('sid')}"
-        return f"{host}:{port}"
+            jdbc = f"{host}:{port}:{p.get('sid')}"
+        else:
+            jdbc = f"{host}:{port}"
+        return jdbc, user, pw
 
-    src_jdbc = resolve_jdbc(src_profile)
-    tgt_jdbc = resolve_jdbc(tgt_profile)
+    src_jdbc, src_user, src_pass = resolve_info(src_profile)
+    tgt_jdbc, tgt_user, tgt_pass = resolve_info(tgt_profile)
     
     out_dir = os.path.join(base_dir, prog)
     os.makedirs(out_dir, exist_ok=True)
@@ -7533,8 +7537,8 @@ def api_fndload_generate():
 # ============================================================
 
 # Database credentials
-DB_USER=apps
-DB_PASS=apps
+DB_USER={tgt_user}
+DB_PASS={tgt_pass}
 
 # Application
 APP_SHORT_NAME={app_short}
@@ -7562,11 +7566,14 @@ CUSTOM_MODE=FORCE
     # 2. download.sh
     dl_text = f"""#!/bin/bash
 # Source Oracle EBS Environment if available
-[ -f "$HOME/.bash_profile" ] && source "$HOME/.bash_profile" 2>/dev/null
+for env_file in /UAT/appluat/EBSapps.env /appl/appluat/EBSapps.env "$HOME/EBSapps.env"; do
+  [ -f "$env_file" ] && . "$env_file" RUN 2>/dev/null && break
+done
+[ -f "$HOME/.bash_profile" ] && . "$HOME/.bash_profile" 2>/dev/null
 
 WORK_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG="$WORK_DIR/download_$(date +%Y%m%d_%H%M%S).log"
-SQLPLUS_CONN="apps/apps"
+SQLPLUS_CONN="{src_user}/{src_pass}"
 
 echo "============================================================" | tee "$LOG"
 echo " DOWNLOAD — $(date '+%Y-%m-%d %H:%M:%S')" | tee -a "$LOG"
@@ -7662,12 +7669,15 @@ ls -1 $WORK_DIR/*.ldt $WORK_DIR/*.rtf $WORK_DIR/*.xsl 2>/dev/null | tee -a "$LOG
     # 3. upload.sh
     ul_text = f"""#!/bin/bash
 # Source Oracle EBS Environment if available
-[ -f "$HOME/.bash_profile" ] && source "$HOME/.bash_profile" 2>/dev/null
+for env_file in /UAT/appluat/EBSapps.env /appl/appluat/EBSapps.env "$HOME/EBSapps.env"; do
+  [ -f "$env_file" ] && . "$env_file" RUN 2>/dev/null && break
+done
+[ -f "$HOME/.bash_profile" ] && . "$HOME/.bash_profile" 2>/dev/null
 
 WORK_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG="$WORK_DIR/upload_$(date +%Y%m%d_%H%M%S).log"
-DB_USER="apps"
-DB_PASS="apps"
+DB_USER="{tgt_user}"
+DB_PASS="{tgt_pass}"
 TGT_JDBC="{tgt_jdbc}"
 
 echo "============================================================" | tee "$LOG"
@@ -9045,8 +9055,13 @@ def api_fndload_upload_folder():
             if f.filename == 'config.cfg':
                 content_cfg = f.read().decode('utf-8', errors='ignore')
                 for line in content_cfg.splitlines():
-                    if line.startswith('APP_SHORT='): app_short = line.split('=')[1].strip()
-                    elif line.startswith('DS_CODE='): ds_code = line.split('=')[1].strip()
+                    if '=' in line and not line.strip().startswith('#'):
+                        k, v = line.split('=', 1)
+                        k = k.strip().upper()
+                        v = v.strip()
+                        if k in ('APP_SHORT', 'APP_SHORT_NAME'): app_short = v
+                        elif k in ('DS_CODE', 'DATA_SOURCE_CODE'): ds_code = v
+                        elif k in ('PROG_NAME', 'PROGRAM_NAMES', 'PROGRAM_NAME'): prog_name = v.split(',')[0].strip()
                 f.seek(0)
 
             import tempfile
@@ -9074,6 +9089,18 @@ def api_fndload_upload_folder():
         else: tgt_jdbc = f"{db_host}:{port}"
 
         apps_pass = p.get("password", "apps")
+
+        # Patch upload.sh if uploaded by user so it has the correct password and posix sourcing
+        safe_pass_escaped = apps_pass.replace('/', r'\/').replace('&', r'\&')
+        safe_jdbc_escaped = tgt_jdbc.replace('/', r'\/').replace('&', r'\&')
+        ssh.exec_command(
+            f"cd {remote_tmp} && if [ -f upload.sh ]; then "
+            f"sed -i 's/^DB_PASS=.*/DB_PASS=\"{safe_pass_escaped}\"/g' upload.sh; "
+            f"sed -i 's/^TGT_JDBC=.*/TGT_JDBC=\"{safe_jdbc_escaped}\"/g' upload.sh; "
+            f"sed -i 's/source ~/\\. ~/g' upload.sh; "
+            f"chmod +x upload.sh; "
+            f"fi"
+        )
 
         def run(cmd, timeout=180):
             full_cmd = f"[ -f ~/.bash_profile ] && . ~/.bash_profile >/dev/null 2>&1; [ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1; {cmd}"
