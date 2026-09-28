@@ -1042,7 +1042,7 @@ def search_concurrent():
             fallback_sql = f"""
             SELECT DISTINCT
                 fcp.concurrent_program_name AS program_short_name,
-                fcpt.user_concurrent_program_name,
+                NVL(fcpt.user_concurrent_program_name, fcp.concurrent_program_name) AS user_concurrent_program_name,
                 fapp.application_short_name,
                 fapp.basepath,
                 fe.execution_method_code,
@@ -1064,8 +1064,8 @@ def search_concurrent():
                 fnd_concurrent_programs_tl fcpt,
                 fnd_executables fe,
                 fnd_application fapp
-            WHERE fcp.concurrent_program_id = fcpt.concurrent_program_id
-              AND fcpt.language = 'US'
+            WHERE fcp.concurrent_program_id = fcpt.concurrent_program_id(+)
+              AND fcpt.language(+) = 'US'
               AND fcp.executable_id = fe.executable_id(+)
               AND fcp.application_id = fapp.application_id
               {fb_where}
@@ -7632,7 +7632,7 @@ SELECT 'java oracle.apps.xdo.oa.util.XDOLoader DOWNLOAD'
     || ' -DB_USERNAME {src_user}'
     || ' -DB_PASSWORD {src_pass}'
     || ' -JDBC_CONNECTION ''{src_jdbc}'''
-    || ' -LOB_TYPE TEMPLATE'
+    || ' -LOB_TYPE '        || XDO.LOB_TYPE
     || ' -APPS_SHORT_NAME ' || XDO.APPLICATION_SHORT_NAME
     || ' -LOB_CODE '        || XDO.LOB_CODE
     || ' -LANGUAGE '        || XDO.LANGUAGE
@@ -7644,7 +7644,7 @@ AND XTB.TEMPLATE_CODE(+)          = XDO.LOB_CODE
 AND XTT.APPLICATION_SHORT_NAME(+) = XDO.APPLICATION_SHORT_NAME
 AND ((XDO.LOB_TYPE = 'TEMPLATE_SOURCE' AND XDO.XDO_FILE_TYPE = 'RTF')
   OR (XDO.LOB_TYPE = 'TEMPLATE'        AND XDO.XDO_FILE_TYPE <> 'XSL-FO'))
-AND (XTT.TEMPLATE_CODE LIKE '{tmpl_code}');
+AND (XTT.TEMPLATE_CODE LIKE '{tmpl_code}' OR XTB.DATA_SOURCE_CODE = '{ds_code}' OR XTB.TEMPLATE_CODE LIKE '{prog}%');
 SPOOL OFF
 EXIT;
 SQLEOF
