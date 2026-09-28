@@ -3228,7 +3228,13 @@ HTML_TEMPLATE = r"""
                         </select>
                         <input type="text" id="concSearchInput" style="flex:1;" placeholder="พิมพ์คำค้นหา (เช่น REP - AR Gold Invoice Form, PTAR_GOLD_INVOICE_2, 17486162)..." onkeydown="if(event.key==='Enter') searchConcurrent()">
                         <button class="btn" onclick="searchConcurrent()">🔍 ค้นหา Concurrent</button>
-                        <button class="btn" style="background:linear-gradient(135deg, #0284c7, #0369a1); border:1px solid #38bdf8; font-weight:600;" onclick="openFndLoadModal()" title="สร้างสคริปต์ FNDLOAD สำหรับย้าย Concurrent Program">🚀 Gen FNDLOAD</button>
+                        <div class="dropdown" style="display:inline-block; position:relative;">
+                            <button class="btn" style="background:linear-gradient(135deg, #0284c7, #0369a1); border:1px solid #38bdf8; font-weight:600;" onclick="toggleFndDropdown(event)" title="จัดการ FNDLOAD">🚀 Gen FNDLOAD ▼</button>
+                            <div id="fndDropdownContent" class="dropdown-content" style="display:none; position:absolute; right:0; background-color:#1e293b; min-width:210px; box-shadow:0px 8px 16px 0px rgba(0,0,0,0.5); z-index:100; border-radius:4px; border:1px solid #334155; margin-top:4px; text-align:left;">
+                                <a href="#" onclick="openFndLoadModal(); toggleFndDropdown(event); return false;" style="color:white; padding:12px 16px; text-decoration:none; display:block; border-bottom:1px solid #334155; font-size:0.85rem;">📥 สร้างสคริปต์ (Clone Program)</a>
+                                <a href="#" onclick="triggerFndFolderUpload(); toggleFndDropdown(event); return false;" style="color:white; padding:12px 16px; text-decoration:none; display:block; font-size:0.85rem;">📤 อัปโหลด FND โดยเลือก Folder</a>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="results-section" style="flex:1;">
@@ -3531,6 +3537,36 @@ HTML_TEMPLATE = r"""
                     <button class="btn btn-secondary" onclick="closeFndLoadModal()">ยกเลิก</button>
                     <button class="btn btn-primary" id="btnSubmitFnd" onclick="submitFndLoadGenerate()">สร้างไฟล์ FNDLOAD</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    
+    <!-- FNDLOAD Upload Modal -->
+    <div class="modal-backdrop" id="fndUploadModal">
+        <div class="modal-content" style="width: 550px;">
+            <div class="modal-header">
+                <span>📤 อัปโหลด FNDLOAD จาก Folder</span>
+                <button style="background:none; border:none; color:#cbd5e1; font-size:1.2rem; cursor:pointer;" onclick="closeFndUploadModal()">&times;</button>
+            </div>
+            <div style="padding: 16px 20px; display:flex; flex-direction:column; gap:12px;">
+                <div style="font-size:0.85rem; color:var(--text-muted);">
+                    ระบุ Target DB ที่ต้องการอัปโหลดไฟล์ FNDLOAD (เช่น CON_*.ldt, XML_*.ldt, TEMPLATE_*.rtf)
+                </div>
+                
+                <div>
+                    <label style="font-size:0.85rem; color:#94a3b8; display:block; margin-bottom:6px;">Folder ที่เลือก:</label>
+                    <input type="text" class="form-control" id="fndUploadFolderName" disabled style="background:#1e293b; color:#38bdf8;">
+                </div>
+
+                <div>
+                    <label style="font-size:0.85rem; color:#94a3b8; display:block; margin-bottom:6px;">Target DB Site (อัปโหลดไปที่ไซต์ใด):</label>
+                    <select class="form-control" id="fndUploadTargetSite"></select>
+                </div>
+            </div>
+            <div class="modal-footer" style="justify-content: flex-end; display:flex; gap:8px;">
+                <button class="btn btn-secondary" onclick="closeFndUploadModal()">ยกเลิก</button>
+                <button class="btn btn-primary" id="btnSubmitFndUpload" onclick="submitFndUpload()">อัปโหลดเข้า Server</button>
             </div>
         </div>
     </div>
@@ -5228,7 +5264,7 @@ HTML_TEMPLATE = r"""
             }
         }
 
-        async function downloadTemplate(templateCode) {
+        async function downloadTemplate(templateCode, concurrentName) {
             showOpProgress('📥 กำลังดาวน์โหลด RTF Template', `กำลังดึง Template ${templateCode} จากฐานข้อมูล XDO_LOBS...`);
             try {
                 const res = await fetch('/api/download_template', {
@@ -7313,7 +7349,7 @@ echo "[1/4] Concurrent Program (afcpprog)..." | tee -a "$LOG"
 sqlplus -S $SQLPLUS_CONN << 'SQLEOF' > /tmp/fnd_concurrent.tmp
 SET PAGESIZE 0 FEEDBACK OFF VERIFY OFF HEADING OFF ECHO OFF TRIMSPOOL ON LINESIZE 32767 WRAP OFF
 SPOOL /tmp/fnd_concurrent.tmp
-SELECT '$FND_TOP/bin/FNDLOAD apps/apps 0 Y DOWNLOAD $FND_TOP/patch/115/import/afcpprog.lct '
+SELECT '$FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y DOWNLOAD $FND_TOP/patch/115/import/afcpprog.lct '
     || 'CON_' || ROWNUM || '_' || fcp.concurrent_program_name || '.ldt'
     || ' PROGRAM CONCURRENT_PROGRAM_NAME=' || fcp.concurrent_program_name
     || ' APPLICATION_SHORT_NAME=' || app.application_short_name
@@ -7329,7 +7365,7 @@ echo "[2/4] XML Publisher Definition (xdotmpl)..." | tee -a "$LOG"
 sqlplus -S $SQLPLUS_CONN << 'SQLEOF' > /tmp/fnd_xml.tmp
 SET PAGESIZE 0 FEEDBACK OFF VERIFY OFF HEADING OFF ECHO OFF TRIMSPOOL ON LINESIZE 32767 WRAP OFF
 SPOOL /tmp/fnd_xml.tmp
-SELECT '$FND_TOP/bin/FNDLOAD apps/apps 0 Y DOWNLOAD $XDO_TOP/patch/115/import/xdotmpl.lct'
+SELECT '$FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y DOWNLOAD $XDO_TOP/patch/115/import/xdotmpl.lct'
     || ' XML_' || ROWNUM || '_' || XDDT.DATA_SOURCE_CODE || '.ldt'
     || ' XDO_DS_DEFINITIONS APPLICATION_SHORT_NAME=' || XDDT.APPLICATION_SHORT_NAME
     || ' DATA_SOURCE_CODE=' || XDDT.DATA_SOURCE_CODE
@@ -7512,7 +7548,13 @@ def api_fndload_run_download():
         if p.get("service_name"): return f"{host}:{port}/{p['service_name']}"
         if p.get("sid"): return f"{host}:{port}:{p['sid']}"
         return f"{host}:{port}"
+    def resolve_pass(key):
+        p = profiles.get(key) or db_sessions.get(key)
+        if not p: return "apps"
+        return p.get("password", "apps")
+        
     src_jdbc = resolve_jdbc(src_profile or active_session_key)
+    apps_pass = resolve_pass(src_profile or active_session_key)
 
     out_dir = os.path.join(base_dir, prog)
     os.makedirs(out_dir, exist_ok=True)
@@ -7528,8 +7570,8 @@ def api_fndload_run_download():
 
         def run(cmd, timeout=120):
             # Source Oracle env so $FND_TOP and $XDO_TOP are populated
-            full_cmd = f"if [ -f ~/.bash_profile ]; then source ~/.bash_profile 2>/dev/null; fi; {cmd}"
-            log_lines.append(f"$ {cmd}")
+            full_cmd = f"[ -f ~/.bash_profile ] && . ~/.bash_profile >/dev/null 2>&1; [ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1; {cmd}"
+            log_lines.append(f"$ {cmd.replace(apps_pass, '***')}")
             stdin, stdout, stderr = ssh.exec_command(full_cmd, timeout=timeout)
             out = stdout.read().decode("utf-8", errors="replace").strip()
             err = stderr.read().decode("utf-8", errors="replace").strip()
@@ -7542,21 +7584,21 @@ def api_fndload_run_download():
         # 1. Concurrent Program (afcpprog)
         log_lines.append(f"\n--- [1/4] Concurrent Program ---")
         ldt_name = f"CON_{prog}.ldt"
-        run(f"cd {remote_tmp} && $FND_TOP/bin/FNDLOAD apps/apps 0 Y DOWNLOAD "
+        run(f"cd {remote_tmp} && $FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y DOWNLOAD "
             f"$FND_TOP/patch/115/import/afcpprog.lct {ldt_name} "
             f"PROGRAM CONCURRENT_PROGRAM_NAME={prog} APPLICATION_SHORT_NAME={app_short}")
 
         # 2. XML Publisher Data Definition (xdotmpl)
         log_lines.append(f"\n--- [2/4] XML Definition ---")
         xml_name = f"XML_{ds_code}.ldt"
-        run(f"cd {remote_tmp} && $FND_TOP/bin/FNDLOAD apps/apps 0 Y DOWNLOAD "
+        run(f"cd {remote_tmp} && $FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y DOWNLOAD "
             f"$XDO_TOP/patch/115/import/xdotmpl.lct {xml_name} "
             f"XDO_DS_DEFINITIONS APPLICATION_SHORT_NAME={app_short} DATA_SOURCE_CODE={ds_code}")
 
         # 3. RTF Templates (XDOLoader)
         log_lines.append(f"\n--- [3/4] RTF Templates ---")
         run(f"cd {remote_tmp} && java oracle.apps.xdo.oa.util.XDOLoader DOWNLOAD "
-            f"-DB_USERNAME apps -DB_PASSWORD apps "
+            f"-DB_USERNAME apps -DB_PASSWORD {apps_pass} "
             f"-JDBC_CONNECTION {src_jdbc} "
             f"-LOB_TYPE TEMPLATE -APPS_SHORT_NAME {app_short} "
             f"-LOB_CODE {ds_code} -LANGUAGE en -TERRITORY TH "
@@ -7564,7 +7606,7 @@ def api_fndload_run_download():
 
         # 4. Request Group (afcpreqg) — non-fatal
         log_lines.append(f"\n--- [4/4] Request Group ---")
-        run(f"cd {remote_tmp} && $FND_TOP/bin/FNDLOAD apps/apps 0 Y DOWNLOAD "
+        run(f"cd {remote_tmp} && $FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y DOWNLOAD "
             f"$FND_TOP/patch/115/import/afcpreqg.lct GROUP_{prog}.ldt "
             f"REQUEST_GROUP REQUEST_GROUP_NAME='' "
             f"APPLICATION_SHORT_NAME={app_short} "
@@ -8358,111 +8400,114 @@ def api_sftp_download_oracle_report():
 @app.route("/api/upload_template", methods=["POST"])
 def api_upload_template():
     global active_session_key, db_sessions
-    
+
     if 'file' not in request.files:
         return jsonify({"success": False, "error": "No file uploaded"})
-        
+
     file = request.files['file']
     template_code = request.form.get("template_code", "").strip()
-    
+
     if not template_code:
         return jsonify({"success": False, "error": "No template code provided"})
-        
+
+    ssh_host = _get_app_server_host(active_session_key)
+    if not ssh_host:
+        return jsonify({"success": False, "error": "Cannot determine SSH host from session"})
+
+    creds = get_sftp_credentials(ssh_host)
+    if not creds:
+        return jsonify({"success": False, "error": "NOT_CONFIGURED", "host": ssh_host})
+
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        
-        # 1. Backup existing BLOB to local folder
-        sql_query = """
-            SELECT file_name, file_data
+
+        cursor.execute('''
+            SELECT application_short_name, language, territory
             FROM xdo_lobs
-            WHERE lob_code = :template_code
-              AND lob_type IN ('TEMPLATE', 'TEMPLATE_SOURCE')
-              AND file_name LIKE '%.rtf'
-        """
-        cursor.execute(sql_query, template_code=template_code)
-        row = cursor.fetchone()
-        
-        if row and row[1] is not None:
-            file_name = row[0]
-            file_data = row[1]
-            if isinstance(file_data, bytes):
-                blob_data = file_data
-            else:
-                blob_data = file_data.read()
-                
-            db_name = db_sessions.get(active_session_key, {}).get('alias', 'UNKNOWN_DB')
-            backup_folder = os.path.join(r"D:\WORK\WORK\Template_Backup", db_name, template_code)
-            if not os.path.exists(backup_folder):
-                os.makedirs(backup_folder)
-                
-            import datetime
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            bk_filename = f"{os.path.splitext(file_name)[0]}_{timestamp}.rtf"
-            bk_path = os.path.join(backup_folder, bk_filename)
-            
-            with open(bk_path, "wb") as f:
-                f.write(blob_data)
-                
-            # Method B: Backup in Database XDO_LOBS
-            bk_lob_code = f"{template_code}_BK_{timestamp}"
-            # Ensure lob_code is within typical Oracle limits (varchar2 120 or similar)
-            if len(bk_lob_code) > 80:
-                bk_lob_code = bk_lob_code[:20] + "_BK_" + timestamp
-            
-            try:
-                db_backup_sql = """
-                    INSERT INTO xdo_lobs (
-                        LOB_CODE, LOB_TYPE, APPLICATION_SHORT_NAME, FILE_NAME, XDO_FILE_TYPE, 
-                        FILE_CONTENT_TYPE, FILE_DATA, FILE_STATUS, LANGUAGE, TERRITORY, 
-                        CREATED_BY, CREATION_DATE, LAST_UPDATED_BY, LAST_UPDATE_DATE, LAST_UPDATE_LOGIN
-                    )
-                    SELECT 
-                        :bk_lob_code, LOB_TYPE, APPLICATION_SHORT_NAME, FILE_NAME, XDO_FILE_TYPE, 
-                        FILE_CONTENT_TYPE, FILE_DATA, NVL(FILE_STATUS, 'I'), LANGUAGE, TERRITORY, 
-                        CREATED_BY, SYSDATE, LAST_UPDATED_BY, SYSDATE, LAST_UPDATE_LOGIN
-                    FROM xdo_lobs
-                    WHERE lob_code = :template_code
-                      AND lob_type IN ('TEMPLATE', 'TEMPLATE_SOURCE')
-                      AND file_name LIKE '%.rtf'
-                      AND ROWNUM = 1
-                """
-                cursor.execute(db_backup_sql, bk_lob_code=bk_lob_code, template_code=template_code)
-            except Exception as bke:
-                print(f"[Upload Template] XDO_LOBS DB backup notice: {bke}")
-                
-        # 2. Update DB with new BLOB
-        new_blob = file.read()
-        update_sql = """
-            UPDATE xdo_lobs
-            SET file_data = :blob_data, last_update_date = SYSDATE
-            WHERE lob_code = :template_code
-              AND lob_type IN ('TEMPLATE', 'TEMPLATE_SOURCE')
-              AND file_name LIKE '%.rtf'
-        """
-        cursor.execute(update_sql, blob_data=new_blob, template_code=template_code)
-        conn.commit()
-        
+            WHERE lob_code = :code AND rownum = 1
+        ''', code=template_code)
+        meta_row = cursor.fetchone()
+
+        if not meta_row:
+            cursor.close()
+            conn.close()
+            return jsonify({"success": False, "error": f"Template code {template_code} not found in XDO_LOBS. Cannot upload via XDOLoader."})
+
+        app_short = meta_row[0] or "XXCUST"
+        lang = meta_row[1] or "en"
+        terr = meta_row[2] or "TH"
+
+        db = db_sessions.get(active_session_key, {})
+        host = db.get("host", ""); port = db.get("port", 1521)
+        if db.get("service_name"): src_jdbc = f"{host}:{port}/{db['service_name']}"
+        elif db.get("sid"): src_jdbc = f"{host}:{port}:{db['sid']}"
+        else: src_jdbc = f"{host}:{port}"
+
+        import tempfile
+        import time
+        import os
+
+        temp_dir = tempfile.gettempdir()
+        local_temp_path = os.path.join(temp_dir, file.filename)
+        file.save(local_temp_path)
+
+        ssh, sftp = _create_sftp_client(ssh_host, creds['username'], creds['password'])
+        remote_tmp_dir = f"/tmp/xdo_upload_{int(time.time())}"
+
+        ssh.exec_command(f"mkdir -p {remote_tmp_dir}")
+        remote_file_path = f"{remote_tmp_dir}/{file.filename}"
+        sftp.put(local_temp_path, remote_file_path)
+
+        apps_pass = db.get("password", "apps")
+
+        cmd = (
+            f"[ -f ~/.bash_profile ] && . ~/.bash_profile >/dev/null 2>&1; "
+            f"[ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1; "
+            f"cd {remote_tmp_dir} && "
+            f"java oracle.apps.xdo.oa.util.XDOLoader UPLOAD "
+            f"-DB_USERNAME apps -DB_PASSWORD {apps_pass} "
+            f"-JDBC_CONNECTION {src_jdbc} "
+            f"-LOB_TYPE TEMPLATE_SOURCE -APPS_SHORT_NAME {app_short} "
+            f"-LOB_CODE {template_code} -LANGUAGE {lang} -TERRITORY {terr} "
+            f"-XDO_FILE_TYPE RTF -FILE_CONTENT_TYPE 'application/rtf' "
+            f"-FILE_NAME {file.filename} -CUSTOM_MODE FORCE "
+            f"2>&1"
+        )
+
+        stdin, stdout, stderr = ssh.exec_command(cmd)
+        out = stdout.read().decode('utf-8', errors='replace')
+        err = stderr.read().decode('utf-8', errors='replace')
+
+        sftp.remove(remote_file_path)
+        ssh.exec_command(f"rmdir {remote_tmp_dir}")
+        ssh.close()
         try:
-            db_name = db_sessions.get(active_session_key, {}).get('alias', 'UNKNOWN_DB')
-            git_report_save(db_name, "TEMPLATE", template_code, file.filename, new_blob)
-        except Exception:
+            os.remove(local_temp_path)
+        except:
             pass
-        
+
+        if "Error" in out or "Exception" in out:
+            raise Exception(f"XDOLoader Error:\n{out}\n{err}")
+
+        db_name = db.get('alias', 'UNKNOWN_DB')
         cursor.close()
         conn.close()
-        
+
         return jsonify({
-            "success": True, 
-            "message": "Uploaded successfully and backup created!",
+            "success": True,
+            "message": "Uploaded and compiled successfully via XDOLoader!",
             "template_code": template_code,
             "filename": file.filename,
             "site": db_name,
-            "backup_path": bk_path if 'bk_path' in locals() else "",
-            "git_backup": True
+            "backup_path": "XDOLoader Uploaded (Server)"
         })
+
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({"success": False, "error": str(e)})
+
 
 @app.route("/api/sftp/upload_rdf", methods=["POST"])
 def api_sftp_upload_rdf():
@@ -8735,6 +8780,113 @@ def push_sql_command():
         ai_commands_queue.append({"type": "RUN_SQL", "sql": sql})
         return jsonify({"success": True})
     return jsonify({"success": False, "error": "No SQL provided"})
+
+@app.route("/api/fndload/upload_folder", methods=["POST"])
+def api_fndload_upload_folder():
+    global active_session_key, db_sessions
+    target_profile = request.form.get("target_profile", "").strip()
+    files = request.files.getlist("files")
+
+    if not target_profile or not files:
+        return jsonify({"success": False, "error": "Missing profile or files"})
+
+    host = _get_app_server_host(target_profile)
+    if not host:
+        return jsonify({"success": False, "error": f"Cannot determine SSH host for profile: {target_profile}"})
+
+    creds = get_sftp_credentials(host)
+    if not creds:
+        return jsonify({"success": False, "error": "NOT_CONFIGURED", "host": host})
+
+    try:
+        ssh, sftp = _create_sftp_client(host, creds['username'], creds['password'])
+
+        import time
+        import os
+        remote_tmp = f"/tmp/fndload_upload_{int(time.time())}"
+        ssh.exec_command(f"mkdir -p {remote_tmp}")
+
+        log_lines = []
+        log_lines.append(f"--- Uploading to {remote_tmp} on {host} ---")
+
+        app_short = "XXCUST"
+        ds_code = ""
+
+        for f in files:
+            if not f.filename: continue
+
+            if f.filename == 'config.cfg':
+                content_cfg = f.read().decode('utf-8', errors='ignore')
+                for line in content_cfg.splitlines():
+                    if line.startswith('APP_SHORT='): app_short = line.split('=')[1].strip()
+                    elif line.startswith('DS_CODE='): ds_code = line.split('=')[1].strip()
+                f.seek(0)
+
+            import tempfile
+            temp_dir = tempfile.gettempdir()
+            local_temp_path = os.path.join(temp_dir, f.filename)
+            f.save(local_temp_path)
+
+            remote_file = f"{remote_tmp}/{f.filename}"
+            sftp.put(local_temp_path, remote_file)
+            log_lines.append(f"Uploaded: {f.filename}")
+            try:
+                os.remove(local_temp_path)
+            except Exception:
+                pass
+
+        profiles_data = load_saved_profiles()
+        profiles = profiles_data.get("profiles", {})
+        p = profiles.get(target_profile) or db_sessions.get(target_profile)
+        if not p:
+            return jsonify({"success": False, "error": "Profile not found"})
+
+        db_host = p.get("host",""); port = p.get("port",1521)
+        if p.get("service_name"): tgt_jdbc = f"{db_host}:{port}/{p['service_name']}"
+        elif p.get("sid"): tgt_jdbc = f"{db_host}:{port}:{p['sid']}"
+        else: tgt_jdbc = f"{db_host}:{port}"
+
+        apps_pass = p.get("password", "apps")
+
+        def run(cmd, timeout=180):
+            full_cmd = f"[ -f ~/.bash_profile ] && . ~/.bash_profile >/dev/null 2>&1; [ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1; {cmd}"
+            log_lines.append(f"$ {cmd.replace(apps_pass, '***')}")
+            stdin, stdout, stderr = ssh.exec_command(full_cmd, timeout=timeout)
+            out = stdout.read().decode("utf-8", errors="replace").strip()
+            err = stderr.read().decode("utf-8", errors="replace").strip()
+            if out: log_lines.extend(out.splitlines())
+            if err: log_lines.extend([f"[ERR] {l}" for l in err.splitlines()])
+
+        run(f"cd {remote_tmp} && for f in CON_*.ldt; do [ -e \"$f\" ] || continue; "
+            f"$FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y UPLOAD $FND_TOP/patch/115/import/afcpprog.lct \"$f\" UPLOAD_MODE=REPLACE CUSTOM_MODE=FORCE; "
+            f"done")
+
+        run(f"cd {remote_tmp} && for f in XML_*.ldt; do [ -e \"$f\" ] || continue; "
+            f"$FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y UPLOAD $XDO_TOP/patch/115/import/xdotmpl.lct \"$f\"; "
+            f"done")
+
+        run(f"cd {remote_tmp} && for f in TEMPLATE_SOURCE_*.rtf; do [ -e \"$f\" ] || continue; "
+            f"java oracle.apps.xdo.oa.util.XDOLoader UPLOAD "
+            f"-DB_USERNAME apps -DB_PASSWORD {apps_pass} "
+            f"-JDBC_CONNECTION '{tgt_jdbc}' "
+            f"-LOB_TYPE TEMPLATE_SOURCE -APPS_SHORT_NAME {app_short} "
+            f"-LOB_CODE {ds_code} -LANGUAGE en -TERRITORY TH -XDO_FILE_TYPE RTF -FILE_CONTENT_TYPE 'application/rtf' "
+            f"-FILE_NAME \"$f\" -CUSTOM_MODE FORCE; "
+            f"done", timeout=300)
+
+        run(f"cd {remote_tmp} && for f in GROUP_*.ldt; do [ -e \"$f\" ] || continue; "
+            f"$FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y UPLOAD $FND_TOP/patch/115/import/afcpreqg.lct \"$f\" UPLOAD_MODE=REPLACE CUSTOM_MODE=FORCE; "
+            f"done")
+
+        ssh.exec_command(f"rm -rf {remote_tmp}")
+        sftp.close()
+        ssh.close()
+
+        return jsonify({"success": True, "log": log_lines})
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
 
 if __name__ == "__main__":
 
