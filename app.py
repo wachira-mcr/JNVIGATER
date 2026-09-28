@@ -708,6 +708,41 @@ def get_db_connection():
         info["password"]
     )
 
+def auto_connect_default_profile():
+    global active_session_key, db_sessions
+    try:
+        prof = load_saved_profiles()
+        last_alias = prof.get("last_used_alias") or "PYT_UAT_8004_DEV"
+        target_key = None
+        for k, v in prof.get("profiles", {}).items():
+            if v.get("alias") == last_alias or k == last_alias:
+                target_key = k
+                break
+        if not target_key and "APPS@PYT_UAT_8004_DEV" in prof.get("profiles", {}):
+            target_key = "APPS@PYT_UAT_8004_DEV"
+        
+        if target_key:
+            p = prof["profiles"][target_key]
+            conn = create_connection(p["host"], p["port"], p.get("service_name"), p.get("sid"), p["user"], p["password"])
+            cursor = conn.cursor()
+            cursor.execute("SELECT instance_name, host_name, version FROM v$instance")
+            row = cursor.fetchone()
+            instance_info = {
+                "instance_name": row[0] if row else "N/A",
+                "host_name": row[1] if row else "N/A",
+                "version": row[2] if row else "N/A"
+            }
+            cursor.close()
+            conn.close()
+            
+            p_copy = p.copy()
+            p_copy["instance"] = instance_info
+            active_session_key = target_key
+            db_sessions[target_key] = p_copy
+            print(f"[Auto-Connect] Successfully connected to {target_key} ({p['host']}:{p['port']}) on startup! ({instance_info['instance_name']} @ {instance_info['host_name']})")
+    except Exception as e:
+        print(f"[Auto-Connect] Startup auto-connect notice: {e}")
+
 @app.route("/api/status", methods=["GET"])
 def status():
     if active_session_key and active_session_key in db_sessions:
@@ -3544,19 +3579,19 @@ HTML_TEMPLATE = r"""
     
     <!-- FNDLOAD Upload Modal -->
     <div class="modal-backdrop" id="fndUploadModal">
-        <div class="modal-content" style="width: 550px;">
+        <div class="modal-content" style="width: 620px; max-height: 90vh; display: flex; flex-direction: column;">
             <div class="modal-header">
-                <span>📤 อัปโหลด FNDLOAD จาก Folder</span>
+                <span>📤 อัปโหลดและ Deploy FNDLOAD จาก Folder</span>
                 <button style="background:none; border:none; color:#cbd5e1; font-size:1.2rem; cursor:pointer;" onclick="closeFndUploadModal()">&times;</button>
             </div>
-            <div style="padding: 16px 20px; display:flex; flex-direction:column; gap:12px;">
+            <div style="padding: 16px 20px; display:flex; flex-direction:column; gap:12px; overflow-y: auto; flex: 1;">
                 <div style="font-size:0.85rem; color:var(--text-muted);">
-                    ระบุ Target DB ที่ต้องการอัปโหลดไฟล์ FNDLOAD (เช่น CON_*.ldt, XML_*.ldt, TEMPLATE_*.rtf)
+                    ระบุ Target DB ที่ต้องการอัปโหลดและสั่งรัน FNDLOAD (จะประมวลผล CON_*.ldt, XML_*.ldt, TEMPLATE_*.rtf, GROUP_*.ldt ให้อัตโนมัติ)
                 </div>
                 
                 <div>
                     <label style="font-size:0.85rem; color:#94a3b8; display:block; margin-bottom:6px;">Folder ที่เลือก:</label>
-                    <input type="text" class="form-control" id="fndUploadFolderName" disabled style="background:#1e293b; color:#38bdf8;">
+                    <input type="text" class="form-control" id="fndUploadFolderName" disabled style="background:#1e293b; color:#38bdf8; font-weight:600;">
                 </div>
 
                 <div>
@@ -3564,10 +3599,16 @@ HTML_TEMPLATE = r"""
                     <select class="form-control" id="fndUploadTargetSite" style="width:100%; background:#1e293b; color:#f8fafc; border:1px solid #38bdf8; padding:8px 10px; border-radius:4px; font-weight:600;"></select>
                     <div style="font-size:0.75rem; color:#38bdf8; margin-top:4px;">⚡ ระบบเลือกไซต์ที่กำลังเชื่อมต่ออยู่ให้เป็นค่าเริ่มต้นโดยอัตโนมัติ</div>
                 </div>
+
+                <!-- Status & Live Log Box -->
+                <div id="fndUploadStatusMsg" style="display:none; max-height:280px; overflow-y:auto; border-radius:6px; font-size:0.83rem;"></div>
             </div>
-            <div class="modal-footer" style="justify-content: flex-end; display:flex; gap:8px;">
-                <button class="btn btn-secondary" onclick="closeFndUploadModal()">ยกเลิก</button>
-                <button class="btn btn-primary" id="btnSubmitFndUpload" onclick="submitFndUpload()">อัปโหลดเข้า Server</button>
+            <div class="modal-footer" style="padding: 12px 20px; display:flex; align-items:center; justify-content:space-between; border-top:1px solid var(--panel-border); background:var(--bg-elevated); flex-shrink:0;">
+                <span id="fndUploadNotice" style="font-size:0.75rem; color:var(--text-muted);">ระบบจะส่งไฟล์และสั่งรันคำสั่งบน Server ให้อัตโนมัติ</span>
+                <div style="display:flex; gap:8px;">
+                    <button class="btn btn-secondary" onclick="closeFndUploadModal()">ปิด</button>
+                    <button class="btn btn-primary" id="btnSubmitFndUpload" onclick="submitFndUpload()">🚀 อัปโหลดเข้า Server</button>
+                </div>
             </div>
         </div>
     </div>
@@ -3925,6 +3966,9 @@ HTML_TEMPLATE = r"""
                             if (s.is_active) opt.selected = true;
                             select.appendChild(opt);
                         });
+                        if (data.sessions.some(s => s.is_active) && (!tableList || tableList.length === 0)) {
+                            fetchTables();
+                        }
                     } else {
                         document.getElementById('statusDot').className = 'dot';
                         select.innerHTML = '<option value="">-- No Active DB Connected --</option>';
@@ -4109,10 +4153,10 @@ HTML_TEMPLATE = r"""
                     });
 
                     const savedAlias = localStorage.getItem('last_tns_alias');
-                    let targetAlias = tnsData.find(t => t.alias === savedAlias);
-                    if (!targetAlias) {
-                        targetAlias = tnsData.find(t => t.alias.includes('8000') || t.alias.includes('PROD') || t.alias.includes('OAG')) || tnsData[0];
-                    }
+                    let targetAlias = (savedAlias && tnsData.find(t => t.alias === savedAlias)) ||
+                                      tnsData.find(t => t.alias === 'PYT_UAT_8004_DEV') ||
+                                      tnsData.find(t => t.alias.includes('8004')) ||
+                                      tnsData.find(t => t.alias.includes('8000') || t.alias.includes('PROD') || t.alias.includes('OAG')) || tnsData[0];
                     if (targetAlias) {
                         select.value = targetAlias.alias;
                         select.dispatchEvent(new Event('change'));
@@ -5497,18 +5541,41 @@ HTML_TEMPLATE = r"""
         function closeFndUploadModal() {
             document.getElementById('fndUploadModal').style.display = 'none';
             pendingFndFiles = null;
+            const statusMsg = document.getElementById('fndUploadStatusMsg');
+            if (statusMsg) {
+                statusMsg.style.display = 'none';
+                statusMsg.innerHTML = '';
+            }
+            const btn = document.getElementById('btnSubmitFndUpload');
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = '🚀 อัปโหลดเข้า Server';
+            }
         }
 
         async function submitFndUpload() {
             if (!pendingFndFiles || pendingFndFiles.length === 0) return;
             const targetSite = document.getElementById('fndUploadTargetSite').value || getActiveSessionKey();
             if (!targetSite) {
-                alert('โปรดเลือก Target DB');
+                alert('โปรดเลือก Target DB หรือเชื่อมต่อ Database ก่อน');
                 return;
             }
 
-            closeFndUploadModal();
+            const statusMsg = document.getElementById('fndUploadStatusMsg');
+            const btnSubmit = document.getElementById('btnSubmitFndUpload');
             
+            statusMsg.style.display = 'block';
+            statusMsg.innerHTML = `
+                <div style="background:#1e3a5f; border:1px solid #3b82f6; color:#93c5fd; padding:12px; border-radius:6px;">
+                    <div style="font-weight:700; margin-bottom:6px; display:flex; align-items:center; gap:8px;">
+                        <span class="loading-spinner" style="width:16px; height:16px; border-width:2px; border-top-color:#38bdf8; display:inline-block;"></span>
+                        กำลังเชื่อมต่อ SSH และรัน FNDLOAD บน Server (${escapeHtml(targetSite)})...
+                    </div>
+                    <div style="font-size:0.78rem; color:#cbd5e1;">ระบบกำลังอัปโหลดไฟล์และประมวลผลคำสั่ง FNDLOAD / XDOLoader อาจใช้เวลาสักครู่ กรุณาอย่าปิดหน้าต่างนี้</div>
+                </div>`;
+            btnSubmit.disabled = true;
+            btnSubmit.textContent = '⏳ กำลังประมวลผล...';
+
             const formData = new FormData();
             formData.append('target_profile', targetSite);
             for (let i = 0; i < pendingFndFiles.length; i++) {
@@ -5516,7 +5583,6 @@ HTML_TEMPLATE = r"""
             }
 
             let folderName = pendingFndFiles[0].webkitRelativePath ? pendingFndFiles[0].webkitRelativePath.split('/')[0] : 'Folder';
-            showOpProgress('📤 อัปโหลด FNDLOAD', `กำลังส่งไฟล์และอัปโหลดเข้า ${targetSite}... (โปรดรอสักครู่)`);
 
             try {
                 const res = await fetch('/api/fndload/upload_folder', {
@@ -5524,30 +5590,62 @@ HTML_TEMPLATE = r"""
                     body: formData
                 });
                 const data = await res.json();
+                
+                const logHtml = (data.log || []).map(l => {
+                    let color = '#94a3b8';
+                    if (l.startsWith('[ERR]') || l.startsWith('[FATAL]') || l.toLowerCase().includes('error') || l.toLowerCase().includes('failed')) color = '#fca5a5';
+                    else if (l.startsWith('  >>') || l.startsWith('Uploaded:') || l.includes('Complete') || l.includes('success')) color = '#6ee7b7';
+                    else if (l.startsWith('$') || l.startsWith('---')) color = '#38bdf8';
+                    return `<div style="font-family:monospace; font-size:0.75rem; color:${color}; line-height:1.4;">${escapeHtml(l)}</div>`;
+                }).join('');
+
+                btnSubmit.disabled = false;
+                btnSubmit.textContent = '🚀 อัปโหลดเข้า Server';
+
                 if (data.success) {
-                    showOpSuccess('อัปโหลด FNDLOAD สำเร็จ!', 'ข้อมูลทั้งหมดถูกนำเข้า Server เรียบร้อย', {
-                        'Target Site': targetSite,
-                        'Folder': folderName,
-                        'Log Output': 'แสดงใน Log Viewer'
-                    });
-                    if (data.log) {
-                        setTimeout(() => {
-                            window.rawLogContent = data.log.join('\n');
-                            window.currentLogFileName = `upload_${folderName}.log`;
-                            document.getElementById('logViewerContent').textContent = window.rawLogContent;
-                            document.getElementById('logViewerModal').style.display = 'flex';
-                        }, 500);
-                    }
+                    statusMsg.innerHTML = `
+                        <div style="background:rgba(63, 185, 80, 0.12); border:1px solid rgba(63, 185, 80, 0.4); color:#3fb950; padding:12px; border-radius:6px;">
+                            <div style="font-weight:700; margin-bottom:6px; font-size:0.9rem;">✅ อัปโหลดและรันคำสั่งเข้า Server สำเร็จเรียบร้อย!</div>
+                            <div style="font-size:0.78rem; margin-bottom:8px; color:#cbd5e1;">Target Site: <b>${escapeHtml(targetSite)}</b> | โฟลเดอร์: <b>${escapeHtml(folderName)}</b></div>
+                            <details open style="font-size:0.76rem;">
+                                <summary style="cursor:pointer; color:#38bdf8; font-weight:600; margin-bottom:4px;">▼ ดู Log ผลการรันบน Server</summary>
+                                <div style="margin-top:6px; max-height:200px; overflow-y:auto; background:#0b1120; padding:10px; border-radius:4px; border:1px solid #1e293b;">
+                                    ${logHtml}
+                                </div>
+                            </details>
+                        </div>`;
+                    showToast(`อัปโหลดและ Deploy โฟลเดอร์ ${folderName} สำเร็จ!`, 4000, 'success');
                 } else if (data.error === 'NOT_CONFIGURED') {
-                    closeOpStatusModal();
+                    statusMsg.innerHTML = `
+                        <div style="background:rgba(210, 153, 34, 0.15); border:1px solid rgba(210, 153, 34, 0.4); color:#d29922; padding:12px; border-radius:6px;">
+                            <div style="font-weight:700; margin-bottom:4px;">⚠️ ยังไม่ได้ตั้งค่ารหัสผ่าน SFTP / SSH</div>
+                            <div style="font-size:0.8rem; color:#cbd5e1;">กรุณาใส่รหัสผ่าน SSH ของ Server: <b>${escapeHtml(data.host||'')}</b></div>
+                        </div>`;
                     showSftpAuthPrompt(data.host || '', () => {
                         submitFndUpload();
                     });
                 } else {
-                    showOpError('อัปโหลด FNDLOAD ไม่สำเร็จ', data.error);
+                    statusMsg.innerHTML = `
+                        <div style="background:rgba(248, 81, 73, 0.15); border:1px solid rgba(248, 81, 73, 0.4); color:#f85149; padding:12px; border-radius:6px;">
+                            <div style="font-weight:700; margin-bottom:4px; font-size:0.9rem;">❌ เกิดข้อผิดพลาดในการอัปโหลด / รันคำสั่ง</div>
+                            <div style="font-size:0.8rem; margin-bottom:8px; color:#cbd5e1;">${escapeHtml(data.error || 'Unknown Error')}</div>
+                            ${data.log && data.log.length > 0 ? `
+                            <details open style="font-size:0.76rem;">
+                                <summary style="cursor:pointer; color:#fca5a5; font-weight:600; margin-bottom:4px;">▼ ดู Log ข้อผิดพลาด</summary>
+                                <div style="margin-top:6px; max-height:180px; overflow-y:auto; background:#0b1120; padding:10px; border-radius:4px; border:1px solid #1e293b;">
+                                    ${logHtml}
+                                </div>
+                            </details>` : ''}
+                        </div>`;
                 }
             } catch (err) {
-                showOpError('เกิดข้อผิดพลาดในการเชื่อมต่อ', err.message || String(err));
+                btnSubmit.disabled = false;
+                btnSubmit.textContent = '🚀 อัปโหลดเข้า Server';
+                statusMsg.innerHTML = `
+                    <div style="background:rgba(248, 81, 73, 0.15); border:1px solid rgba(248, 81, 73, 0.4); color:#f85149; padding:12px; border-radius:6px;">
+                        <div style="font-weight:700; margin-bottom:4px;">❌ เกิดข้อผิดพลาดในการเชื่อมต่อ</div>
+                        <div style="font-size:0.8rem; color:#cbd5e1;">${escapeHtml(err.message || String(err))}</div>
+                    </div>`;
             }
         }
 
@@ -7156,6 +7254,7 @@ def api_choose_save_path():
 
 
 def start_server():
+    auto_connect_default_profile()
     app.run(host="127.0.0.1", port=5055, debug=False, threaded=True)
 
 def main():
@@ -8993,7 +9092,12 @@ def api_fndload_upload_folder():
             f"$FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y UPLOAD $XDO_TOP/patch/115/import/xdotmpl.lct \"$f\"; "
             f"done")
 
-        run(f"cd {remote_tmp} && for f in TEMPLATE_SOURCE_*.rtf; do [ -e \"$f\" ] || continue; "
+        if not ds_code and prog_name:
+            ds_code = prog_name
+        if not ds_code:
+            ds_code = "XXCUST_TMPL"
+
+        run(f"cd {remote_tmp} && for f in TEMPLATE_SOURCE_*.rtf *.rtf; do [ -e \"$f\" ] || continue; "
             f"java oracle.apps.xdo.oa.util.XDOLoader UPLOAD "
             f"-DB_USERNAME apps -DB_PASSWORD {apps_pass} "
             f"-JDBC_CONNECTION '{tgt_jdbc}' "
