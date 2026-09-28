@@ -7583,7 +7583,7 @@ echo "[1/4] Concurrent Program (afcpprog)..." | tee -a "$LOG"
 sqlplus -S $SQLPLUS_CONN << 'SQLEOF' > /tmp/fnd_concurrent.tmp
 SET PAGESIZE 0 FEEDBACK OFF VERIFY OFF HEADING OFF ECHO OFF TRIMSPOOL ON LINESIZE 32767 WRAP OFF
 SPOOL /tmp/fnd_concurrent.tmp
-SELECT '$FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y DOWNLOAD $FND_TOP/patch/115/import/afcpprog.lct '
+SELECT '$FND_TOP/bin/FNDLOAD {src_user}/{src_pass} 0 Y DOWNLOAD $FND_TOP/patch/115/import/afcpprog.lct '
     || 'CON_' || ROWNUM || '_' || fcp.concurrent_program_name || '.ldt'
     || ' PROGRAM CONCURRENT_PROGRAM_NAME=' || fcp.concurrent_program_name
     || ' APPLICATION_SHORT_NAME=' || app.application_short_name
@@ -7599,7 +7599,7 @@ echo "[2/4] XML Publisher Definition (xdotmpl)..." | tee -a "$LOG"
 sqlplus -S $SQLPLUS_CONN << 'SQLEOF' > /tmp/fnd_xml.tmp
 SET PAGESIZE 0 FEEDBACK OFF VERIFY OFF HEADING OFF ECHO OFF TRIMSPOOL ON LINESIZE 32767 WRAP OFF
 SPOOL /tmp/fnd_xml.tmp
-SELECT '$FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y DOWNLOAD $XDO_TOP/patch/115/import/xdotmpl.lct'
+SELECT '$FND_TOP/bin/FNDLOAD {src_user}/{src_pass} 0 Y DOWNLOAD $XDO_TOP/patch/115/import/xdotmpl.lct'
     || ' XML_' || ROWNUM || '_' || XDDT.DATA_SOURCE_CODE || '.ldt'
     || ' XDO_DS_DEFINITIONS APPLICATION_SHORT_NAME=' || XDDT.APPLICATION_SHORT_NAME
     || ' DATA_SOURCE_CODE=' || XDDT.DATA_SOURCE_CODE
@@ -7618,8 +7618,8 @@ sqlplus -S $SQLPLUS_CONN << 'SQLEOF' > /tmp/fnd_rtf_down.tmp
 SET PAGESIZE 0 FEEDBACK OFF VERIFY OFF HEADING OFF ECHO OFF TRIMSPOOL ON LINESIZE 32767 WRAP OFF
 SPOOL /tmp/fnd_rtf_down.tmp
 SELECT 'java oracle.apps.xdo.oa.util.XDOLoader DOWNLOAD'
-    || ' -DB_USERNAME apps'
-    || ' -DB_PASSWORD apps'
+    || ' -DB_USERNAME {src_user}'
+    || ' -DB_PASSWORD {src_pass}'
     || ' -JDBC_CONNECTION ''{src_jdbc}'''
     || ' -LOB_TYPE TEMPLATE'
     || ' -APPS_SHORT_NAME ' || XDO.APPLICATION_SHORT_NAME
@@ -7643,7 +7643,7 @@ echo "[4/4] Request Group (afcpreqg)..." | tee -a "$LOG"
 sqlplus -S $SQLPLUS_CONN << 'SQLEOF' > /tmp/fnd_grp_down.tmp
 SET PAGESIZE 0 FEEDBACK OFF VERIFY OFF HEADING OFF ECHO OFF TRIMSPOOL ON LINESIZE 32767 WRAP OFF
 SPOOL /tmp/fnd_grp_down.tmp
-SELECT 'FNDLOAD apps/apps O Y DOWNLOAD $FND_TOP/patch/115/import/afcpreqg.lct '
+SELECT '$FND_TOP/bin/FNDLOAD {src_user}/{src_pass} 0 Y DOWNLOAD $FND_TOP/patch/115/import/afcpreqg.lct '
     || 'GROUP_' || ROWNUM || '_' || APP.APPLICATION_SHORT_NAME || '_' || FCP.CONCURRENT_PROGRAM_NAME || '.ldt'
     || ' REQUEST_GROUP REQUEST_GROUP_NAME=''' || REQG.REQUEST_GROUP_NAME
     || ''' APPLICATION_SHORT_NAME='''        || APP.APPLICATION_SHORT_NAME
