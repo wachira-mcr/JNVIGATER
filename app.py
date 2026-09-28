@@ -3228,11 +3228,11 @@ HTML_TEMPLATE = r"""
                         </select>
                         <input type="text" id="concSearchInput" style="flex:1;" placeholder="พิมพ์คำค้นหา (เช่น REP - AR Gold Invoice Form, PTAR_GOLD_INVOICE_2, 17486162)..." onkeydown="if(event.key==='Enter') searchConcurrent()">
                         <button class="btn" onclick="searchConcurrent()">🔍 ค้นหา Concurrent</button>
-                        <div class="dropdown" style="display:inline-block; position:relative;">
-                            <button class="btn" style="background:linear-gradient(135deg, #0284c7, #0369a1); border:1px solid #38bdf8; font-weight:600;" onclick="toggleFndDropdown(event)" title="จัดการ FNDLOAD">🚀 Gen FNDLOAD ▼</button>
-                            <div id="fndDropdownContent" class="dropdown-content" style="display:none; position:absolute; right:0; background-color:#1e293b; min-width:210px; box-shadow:0px 8px 16px 0px rgba(0,0,0,0.5); z-index:100; border-radius:4px; border:1px solid #334155; margin-top:4px; text-align:left;">
-                                <a href="#" onclick="openFndLoadModal(); toggleFndDropdown(event); return false;" style="color:white; padding:12px 16px; text-decoration:none; display:block; border-bottom:1px solid #334155; font-size:0.85rem;">📥 สร้างสคริปต์ (Clone Program)</a>
-                                <a href="#" onclick="triggerFndFolderUpload(); toggleFndDropdown(event); return false;" style="color:white; padding:12px 16px; text-decoration:none; display:block; font-size:0.85rem;">📤 อัปโหลด FND โดยเลือก Folder</a>
+                        <div class="dropdown" style="display:inline-block; position:relative; z-index:1000;">
+                            <button class="btn" style="background:linear-gradient(135deg, #0284c7, #0369a1); border:1px solid #38bdf8; font-weight:600; cursor:pointer;" onclick="toggleFndDropdown(event)" title="จัดการ FNDLOAD">🚀 Gen FNDLOAD ▼</button>
+                            <div id="fndDropdownContent" class="dropdown-content" style="display:none; position:absolute; right:0; top:calc(100% + 4px); background-color:#1e293b; min-width:220px; box-shadow:0px 8px 24px 0px rgba(0,0,0,0.7); z-index:99999; border-radius:6px; border:1px solid #334155; text-align:left; overflow:hidden;">
+                                <a href="javascript:void(0)" onclick="openFndLoadModal(); toggleFndDropdown(event);" style="color:#f8fafc; padding:12px 16px; text-decoration:none; display:block; border-bottom:1px solid #334155; font-size:0.85rem; font-weight:500; cursor:pointer;" onmouseover="this.style.background='#334155'" onmouseout="this.style.background='transparent'">📥 สร้างสคริปต์ (Clone Program)</a>
+                                <a href="javascript:void(0)" onclick="triggerFndFolderUpload(); toggleFndDropdown(event);" style="color:#f8fafc; padding:12px 16px; text-decoration:none; display:block; font-size:0.85rem; font-weight:500; cursor:pointer;" onmouseover="this.style.background='#334155'" onmouseout="this.style.background='transparent'">📤 อัปโหลด FND โดยเลือก Folder</a>
                             </div>
                         </div>
                     </div>
@@ -5420,6 +5420,130 @@ HTML_TEMPLATE = r"""
             const cur = getActiveSessionKey();
             if (cur && !cachedProfilesList.includes(cur)) {
                 cachedProfilesList.unshift(cur);
+            }
+        }
+
+        
+        let pendingFndFiles = null;
+
+        function toggleFndDropdown(e) {
+            if (e) {
+                e.stopPropagation();
+                e.preventDefault();
+            }
+            const content = document.getElementById('fndDropdownContent');
+            if (content) {
+                const currentDisplay = window.getComputedStyle(content).display;
+                content.style.display = (currentDisplay === 'none') ? 'block' : 'none';
+            }
+        }
+
+        document.addEventListener('click', function(e) {
+            const content = document.getElementById('fndDropdownContent');
+            if (content && content.style.display === 'block') {
+                if (!e.target.closest('.dropdown')) {
+                    content.style.display = 'none';
+                }
+            }
+        });
+
+        function triggerFndFolderUpload() {
+            let input = document.getElementById('fndFolderUploadInput');
+            if (!input) {
+                input = document.createElement('input');
+                input.type = 'file';
+                input.id = 'fndFolderUploadInput';
+                input.webkitdirectory = true;
+                input.directory = true;
+                input.style.display = 'none';
+                input.onchange = handleFndFolderSelection;
+                document.body.appendChild(input);
+            }
+            input.value = ''; // Reset
+            input.click();
+        }
+
+        async function handleFndFolderSelection(event) {
+            const files = event.target.files;
+            if (!files || files.length === 0) return;
+
+            pendingFndFiles = files;
+            let folderName = files[0].webkitRelativePath ? files[0].webkitRelativePath.split('/')[0] : 'Selected_Folder';
+            document.getElementById('fndUploadFolderName').value = folderName;
+
+            const targetSelect = document.getElementById('fndUploadTargetSite');
+            targetSelect.innerHTML = '';
+            
+            try {
+                const res = await fetch('/api/get_saved_profiles');
+                const data = await res.json();
+                if (data.success && data.profiles) {
+                    for (const [key, profile] of Object.entries(data.profiles)) {
+                        const opt = document.createElement('option');
+                        opt.value = key;
+                        opt.textContent = `${key}`;
+                        targetSelect.appendChild(opt);
+                    }
+                }
+            } catch (err) {}
+
+            document.getElementById('fndUploadModal').style.display = 'flex';
+        }
+
+        function closeFndUploadModal() {
+            document.getElementById('fndUploadModal').style.display = 'none';
+            pendingFndFiles = null;
+        }
+
+        async function submitFndUpload() {
+            if (!pendingFndFiles || pendingFndFiles.length === 0) return;
+            const targetSite = document.getElementById('fndUploadTargetSite').value;
+            if (!targetSite) {
+                alert('โปรดเลือก Target DB');
+                return;
+            }
+
+            closeFndUploadModal();
+            
+            const formData = new FormData();
+            formData.append('target_profile', targetSite);
+            for (let i = 0; i < pendingFndFiles.length; i++) {
+                formData.append('files', pendingFndFiles[i], pendingFndFiles[i].name);
+            }
+
+            let folderName = pendingFndFiles[0].webkitRelativePath ? pendingFndFiles[0].webkitRelativePath.split('/')[0] : 'Folder';
+            showOpProgress('📤 อัปโหลด FNDLOAD', `กำลังส่งไฟล์และอัปโหลดเข้า ${targetSite}... (โปรดรอสักครู่)`);
+
+            try {
+                const res = await fetch('/api/fndload/upload_folder', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showOpSuccess('อัปโหลด FNDLOAD สำเร็จ!', 'ข้อมูลทั้งหมดถูกนำเข้า Server เรียบร้อย', {
+                        'Target Site': targetSite,
+                        'Folder': folderName,
+                        'Log Output': 'แสดงใน Log Viewer'
+                    });
+                    if (data.log) {
+                        setTimeout(() => {
+                            window.rawLogContent = data.log.join('\n');
+                            window.currentLogFileName = `upload_${folderName}.log`;
+                            document.getElementById('logViewerContent').textContent = window.rawLogContent;
+                            document.getElementById('logViewerModal').style.display = 'flex';
+                        }, 500);
+                    }
+                } else if (data.error === 'NOT_CONFIGURED') {
+                    closeOpStatusModal();
+                    showSftpAuthPrompt(data.host || '', () => {
+                        submitFndUpload();
+                    });
+                } else {
+                    showOpError('อัปโหลด FNDLOAD ไม่สำเร็จ', data.error);
+                }
+            } catch (err) {
+                showOpError('เกิดข้อผิดพลาดในการเชื่อมต่อ', err.message || String(err));
             }
         }
 
