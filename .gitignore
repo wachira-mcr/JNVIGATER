@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+build/
+dist/
+*.log
+temp*
+.system_generated/
+*.pdf
+*.png
+output/
+saved_profiles.json
+sftp_profiles.json
+app_backup*.py
