@@ -3391,6 +3391,28 @@ HTML_TEMPLATE = r"""
     <input type="file" id="rdfUploadInput" style="display:none;" accept=".rdf" onchange="handleRdfUpload(event)">
 
     <!-- Modals -->
+    <div class="modal-backdrop" id="rdfConfirmModal" style="z-index: 10600; backdrop-filter: blur(4px);">
+        <div class="modal-content" style="width: 500px; max-width: 95vw; border-radius: 12px; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.65); border: 1px solid var(--panel-border-light); background: var(--bg-surface);">
+            <div style="padding: 13px 18px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--panel-border); background: var(--bg-elevated);">
+                <div style="font-weight: 700; font-size: 0.92rem; color: var(--accent-teal);">
+                    <span style="margin-right:8px;">⚠️</span>ยืนยันการอัปโหลด RDF
+                </div>
+                <button type="button" onclick="document.getElementById('rdfConfirmModal').style.display='none'" style="background:none; border:none; color:var(--text-muted); font-size:1.2rem; cursor:pointer; padding:2px 6px; line-height:1;">✖</button>
+            </div>
+            <div style="padding: 24px 22px; text-align: center;">
+                <div style="font-size: 0.9rem; color: var(--text-main); margin-bottom: 20px; line-height:1.5;">
+                    โปรแกรมตรวจพบว่านี่คือ <b>ไซต์ SME</b><br>
+                    คุณต้องการอัปโหลดไฟล์ลงทั้งโฟลเดอร์ <b>TH</b> และ <b>US</b> เลยหรือไม่?<br>
+                    <span style="color:var(--text-muted); font-size:0.8rem;">(ระบบจะสำรองข้อมูลและอัปโหลดขึ้น GIT ให้อัตโนมัติด้วย)</span>
+                </div>
+                <div style="display:flex; justify-content:center; gap:12px;">
+                    <button class="btn btn-primary" style="padding: 8px 16px;" onclick="proceedRdfUpload(true)">อัปโหลดทั้ง TH และ US</button>
+                    <button class="btn btn-secondary" style="padding: 8px 16px;" onclick="proceedRdfUpload(false)">อัปโหลดเฉพาะ US</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
     <!-- Operation Status Modal (Upload / Download Status) -->
     <div class="modal-backdrop" id="opStatusModal" style="z-index: 10500; backdrop-filter: blur(4px);">
         <div class="modal-content op-card-anim" style="width: 500px; max-width: 95vw; border-radius: 12px; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.65); border: 1px solid var(--panel-border-light); background: var(--bg-surface);">
@@ -6882,9 +6904,26 @@ HTML_TEMPLATE = r"""
             }
         }
         
+        let currentUploadBothLangs = false;
+        
         function triggerUploadRdf(basePath) {
             if (!basePath) return;
             currentUploadRdfBasePath = basePath;
+            
+            const sessionSelect = document.getElementById('sessionSelect');
+            const siteName = sessionSelect.options[sessionSelect.selectedIndex].text.toUpperCase();
+            
+            if (siteName.includes('SME')) {
+                document.getElementById('rdfConfirmModal').style.display = 'flex';
+            } else {
+                proceedRdfUpload(false);
+            }
+        }
+        
+        function proceedRdfUpload(bothLangs) {
+            currentUploadBothLangs = bothLangs;
+            const modal = document.getElementById('rdfConfirmModal');
+            if(modal) modal.style.display = 'none';
             document.getElementById('rdfUploadInput').click();
         }
         
@@ -6895,10 +6934,12 @@ HTML_TEMPLATE = r"""
             const formData = new FormData();
             formData.append('file', file);
             formData.append('base_path', currentUploadRdfBasePath);
+            formData.append('upload_both_langs', currentUploadBothLangs ? 'true' : 'false');
             
             event.target.value = ''; // Reset input
             
-            showOpProgress('📤 กำลังอัปโหลด Oracle Report (RDF)', `กำลังสำรองไฟล์เดิม และอัปโหลด ${file.name} ขึ้น Server (fs1/fs2)...`);
+            const bothLangsText = currentUploadBothLangs ? ' (TH & US)' : '';
+            showOpProgress('📤 กำลังอัปโหลด Oracle Report (RDF)', `กำลังสำรองไฟล์เดิม และอัปโหลด ${file.name}${bothLangsText} ขึ้น Server...`);
             
             try {
                 const res = await fetch('/api/sftp/upload_rdf', {
@@ -8789,6 +8830,8 @@ def api_sftp_upload_rdf():
         if not filename:
             filename = "uploaded_report.rdf"
             
+        upload_both_langs = request.form.get("upload_both_langs", "false").lower() == "true"
+        
         remote_path = f"{base_path}/reports/US" if base_path else "."
         if '$' in remote_path:
             resolve_cmd = f"[ -f ~/.bash_profile ] && . ~/.bash_profile >/dev/null 2>&1; [ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1; echo '===JNAV==='; echo {remote_path}"
@@ -8811,6 +8854,13 @@ def api_sftp_upload_rdf():
             else:
                 remote_path = eval_path or remote_path
                 
+        resolved_paths = set([remote_path])
+        if upload_both_langs:
+            if '/US' in remote_path:
+                resolved_paths.add(remote_path.replace('/US', '/TH'))
+            elif '/TH' in remote_path:
+                resolved_paths.add(remote_path.replace('/TH', '/US'))
+                
         import datetime
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         bk_filename = f"{os.path.splitext(filename)[0]}_{timestamp}{os.path.splitext(filename)[1]}"
@@ -8821,11 +8871,13 @@ def api_sftp_upload_rdf():
         if not os.path.exists(backup_folder):
             os.makedirs(backup_folder)
         
-        fs_paths = [remote_path]
-        if '/fs1/' in remote_path:
-            fs_paths.append(remote_path.replace('/fs1/', '/fs2/'))
-        elif '/fs2/' in remote_path:
-            fs_paths.append(remote_path.replace('/fs2/', '/fs1/'))
+        fs_paths = []
+        for rpath in resolved_paths:
+            fs_paths.append(rpath)
+            if '/fs1/' in rpath:
+                fs_paths.append(rpath.replace('/fs1/', '/fs2/'))
+            elif '/fs2/' in rpath:
+                fs_paths.append(rpath.replace('/fs2/', '/fs1/'))
             
         new_file_content = file.read()
         
