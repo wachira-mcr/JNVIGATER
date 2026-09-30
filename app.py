@@ -8751,7 +8751,9 @@ def api_upload_template():
         ssh, sftp = _create_sftp_client(ssh_host, creds['username'], creds['password'])
         remote_tmp_dir = f"/tmp/xdo_upload_{int(time.time())}"
 
-        ssh.exec_command(f"mkdir -p {remote_tmp_dir}")
+        stdin, stdout, stderr = ssh.exec_command(f"mkdir -p {remote_tmp_dir}")
+        stdout.channel.recv_exit_status()  # Wait for directory creation
+
         remote_file_path = f"{remote_tmp_dir}/{file.filename}"
         sftp.put(local_temp_path, remote_file_path)
 
@@ -9114,7 +9116,8 @@ def api_fndload_upload_folder():
         import time
         import os
         remote_tmp = f"/tmp/fndload_upload_{int(time.time())}"
-        ssh.exec_command(f"mkdir -p {remote_tmp}")
+        stdin, stdout, stderr = ssh.exec_command(f"mkdir -p {remote_tmp}")
+        stdout.channel.recv_exit_status()
 
         log_lines = []
         log_lines.append(f"--- Uploading to {remote_tmp} on {host} ---")
