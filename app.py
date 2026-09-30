@@ -4948,7 +4948,7 @@ HTML_TEMPLATE = r"""
                     const basePath = basePathMatch ? basePathMatch[1] : '$INV_TOP';
                     let searchPath = r.source_file_path ? r.source_file_path.substring(0, r.source_file_path.lastIndexOf('/')) : basePath + '/reports/US';
                     
-                    actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #0284c7, #0369a1);" onclick="downloadOracleReport('${(r.source_file_path || '').replace(/'/g, "\\'")}', '${r.package_name || r.program_short_name || ''}', '${basePath}')" title="Download Oracle Report (.rdf) from Server">📥 RDF</button>`);
+                    actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #0284c7, #0369a1);" onclick="downloadOracleReport('${(r.source_file_path || '').replace(/'/g, "\\'")}', '${r.program_short_name || r.package_name || ''}', '${basePath}')" title="Download Oracle Report (.rdf) from Server">📥 RDF</button>`);
                     actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #d946ef, #a21caf);" onclick="triggerUploadRdf('${basePath}')" title="Upload and Backup RDF">📤 RDF</button>`);
                     actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #7c3aed, #6d28d9);" onclick="openSftpExplorer('${searchPath}', '${r.program_short_name || ''}')" title="Browse Server Files (SFTP)">📂 SFTP</button>`);
                 }
@@ -7650,6 +7650,10 @@ EXIT;
 SQLEOF
 while IFS= read -r cmd; do [ -n "$cmd" ] && eval "$cmd" >> "$LOG" 2>&1 && echo "  [OK]" || echo "  [FAIL]"; done < /tmp/fnd_rtf_down.tmp
 
+# Rename downloaded templates to concurrent program name
+for f in "$WORK_DIR"/*.rtf; do [ -e "$f" ] && mv "$f" "$WORK_DIR/{prog}.rtf"; done
+for f in "$WORK_DIR"/*.xsl; do [ -e "$f" ] && mv "$f" "$WORK_DIR/{prog}.xsl"; done
+
 echo "[4/4] Request Group (afcpreqg)..." | tee -a "$LOG"
 sqlplus -S $SQLPLUS_CONN << 'SQLEOF' > /tmp/fnd_grp_down.tmp
 SET PAGESIZE 0 FEEDBACK OFF VERIFY OFF HEADING OFF ECHO OFF TRIMSPOOL ON LINESIZE 32767 WRAP OFF
@@ -7851,6 +7855,10 @@ def api_fndload_run_download():
             f"-LOB_TYPE TEMPLATE -APPS_SHORT_NAME {app_short} "
             f"-LOB_CODE {ds_code} -LANGUAGE en -TERRITORY TH "
             f"2>&1 | head -100", timeout=180)
+        
+        # Rename templates to program name
+        run(f"cd {remote_tmp} && for f in *.rtf; do [ -e \"$f\" ] && mv \"$f\" \"{prog}.rtf\"; done")
+        run(f"cd {remote_tmp} && for f in *.xsl; do [ -e \"$f\" ] && mv \"$f\" \"{prog}.xsl\"; done")
 
         # 4. Request Group (afcpreqg) — non-fatal
         log_lines.append(f"\n--- [4/4] Request Group ---")
@@ -8562,11 +8570,10 @@ def api_sftp_download_oracle_report():
                 target_path = eval_path or target_path
             
         file_name = os.path.basename(target_path)
-        if not file_name or file_name == '.' or not file_name.lower().endswith('.rdf'):
-            if program_name:
-                file_name = program_name if program_name.lower().endswith('.rdf') else f"{program_name}.rdf"
-            else:
-                file_name = "report.rdf"
+        if program_name:
+            file_name = program_name if program_name.lower().endswith('.rdf') else f"{program_name}.rdf"
+        elif not file_name or file_name == '.' or not file_name.lower().endswith('.rdf'):
+            file_name = "report.rdf"
                 
         dir_name = os.path.dirname(target_path) or "."
         candidate_remotes = [
@@ -8889,8 +8896,11 @@ def api_download_template():
         files_downloaded = 0
         downloaded_paths = []
         for row in cursor:
-            file_name = row[0]
-            file_data = row[1] 
+            original_file_name = row[0]
+            ext = os.path.splitext(original_file_name)[1]
+            if not ext: ext = ".rtf"
+            file_name = f"{template_code}{ext}"
+            file_data = row[1]
             
             if file_data is not None:
                 # อ่านข้อมูล BLOB
