@@ -4919,6 +4919,10 @@ HTML_TEMPLATE = r"""
                     ? `<button class="btn" style="padding:3px 8px; font-size:0.75rem; background:linear-gradient(135deg, #f59e0b, #d97706);" onclick="openPackageFromConc('${pkgName}')">📦 ${escapeHtml(pkgName)}</button>`
                     : '<span style="color:#64748b;">-</span>';
 
+                const safeProgShort = (r.program_short_name || r.package_name || '').replace(/'/g, "\\'");
+                const safeUserProgName = (r.user_concurrent_program_name || safeProgShort).replace(/'/g, "\\'");
+
+
                 let actionColumn = '<span style="color:#64748b; font-size:0.75rem;">-</span>';
                 let actions = [];
 
@@ -4953,8 +4957,7 @@ HTML_TEMPLATE = r"""
                 const hasXml = (r.outfile_name && (r.outfile_name.toLowerCase().endsWith('.xml') || hasPublishedOutput || r.output_file_type === 'XML'));
                 if (hasXml && r.outfile_name) {
                     const safeXmlPath = r.outfile_name.replace(/'/g, "\\'");
-                    const progName = (r.program_short_name || r.package_name || 'REPORT').replace(/'/g, "\\'");
-                    actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #f43f5e, #be123c);" onclick="downloadOutputXml('${safeXmlPath}', '${r.request_id || ''}', '${progName}')" title="Download Data XML file">📥 XML</button>`);
+                    actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #f43f5e, #be123c);" onclick="downloadOutputXml('${safeXmlPath}', '${r.request_id || ''}', '${safeUserProgName}')" title="Download Data XML file">📥 XML</button>`);
                 }
 
                 // 3. View Log Button (📑 Log - Standard Oracle EBS View Log)
@@ -4970,14 +4973,15 @@ HTML_TEMPLATE = r"""
                     const basePath = basePathMatch ? basePathMatch[1] : '$INV_TOP';
                     let searchPath = r.source_file_path ? r.source_file_path.substring(0, r.source_file_path.lastIndexOf('/')) : basePath + '/reports/US';
                     
-                    actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #0284c7, #0369a1);" onclick="downloadOracleReport('${(r.source_file_path || '').replace(/'/g, "\\'")}', '${r.program_short_name || r.package_name || ''}', '${basePath}')" title="Download Oracle Report (.rdf) from Server">📥 RDF</button>`);
+                    
+                    actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #0284c7, #0369a1);" onclick="downloadOracleReport('${(r.source_file_path || '').replace(/'/g, "\\'")}', '${safeProgShort}', '${basePath}', '${safeUserProgName}')" title="Download Oracle Report (.rdf) from Server">📥 RDF</button>`);
                     actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #d946ef, #a21caf);" onclick="triggerUploadRdf('${basePath}')" title="Upload and Backup RDF">📤 RDF</button>`);
                     actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #7c3aed, #6d28d9);" onclick="openSftpExplorer('${searchPath}', '${r.program_short_name || ''}')" title="Browse Server Files (SFTP)">📂 SFTP</button>`);
                 }
                 
                 // 5. RTF Template
                 if (r.program_type && (r.program_type.includes('RTF') || r.program_type.includes('XML Publisher') || r.program_type.includes('PL/SQL') || r.program_type.includes('Oracle Reports'))) {
-                    actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #10b981, #059669);" onclick="downloadTemplate('${r.program_short_name || ''}')" title="Download RTF Template">📥 RTF</button>`);
+                    actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #10b981, #059669);" onclick="downloadTemplate('', '')" title="Download RTF Template">📥 RTF</button>`);
                     actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #14b8a6, #0f766e);" onclick="triggerUploadRtf('${r.program_short_name || ''}')" title="Upload and Backup RTF Template">📤 RTF</button>`);
                 }
 
@@ -5290,7 +5294,7 @@ HTML_TEMPLATE = r"""
             }
         }
 
-        async function downloadOracleReport(sourceFilePath, programName, basePath) {
+        async function downloadOracleReport(sourceFilePath, programName, basePath, folderName) {
             showOpProgress('📥 กำลังดาวน์โหลด Oracle Report', `กำลังค้นหาและดาวน์โหลดไฟล์ ${programName || ''}.rdf จาก Server ผ่าน SFTP...`);
             try {
                 const res = await fetch('/api/sftp/download_oracle_report', {
@@ -5299,7 +5303,8 @@ HTML_TEMPLATE = r"""
                     body: JSON.stringify({
                         source_file_path: sourceFilePath,
                         program_name: programName,
-                        base_path: basePath
+                        base_path: basePath,
+                        folder_name: folderName
                     })
                 });
                 const data = await res.json();
@@ -5314,7 +5319,7 @@ HTML_TEMPLATE = r"""
                 } else if (data.error === 'NOT_CONFIGURED') {
                     closeOpStatusModal();
                     showSftpAuthPrompt(data.host || '', () => {
-                        downloadOracleReport(sourceFilePath, programName, basePath);
+                        downloadOracleReport(sourceFilePath, programName, basePath, folderName);
                     });
                 } else {
                     showOpError('ดาวน์โหลด Oracle Report ไม่สำเร็จ', data.error);
@@ -5342,13 +5347,13 @@ HTML_TEMPLATE = r"""
             }
         }
 
-        async function downloadTemplate(templateCode, concurrentName) {
+        async function downloadTemplate(templateCode, folderName) {
             showOpProgress('📥 กำลังดาวน์โหลด RTF Template', `กำลังดึง Template ${templateCode} จากฐานข้อมูล XDO_LOBS...`);
             try {
                 const res = await fetch('/api/download_template', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({template_code: templateCode})
+                    body: JSON.stringify({template_code: templateCode, folder_name: folderName})
                 });
                 const data = await res.json();
                 
@@ -8639,6 +8644,7 @@ def api_sftp_download_oracle_report():
     data = request.json or {}
     source_file_path = data.get("source_file_path", "").strip()
     program_name = data.get("program_name", "").strip()
+    folder_name = data.get("folder_name", "").strip()
     base_path = data.get("base_path", "").strip()
     
     host = _get_app_server_host(active_session_key)
@@ -8676,10 +8682,12 @@ def api_sftp_download_oracle_report():
                 target_path = eval_path or target_path
             
         file_name = os.path.basename(target_path)
-        if program_name:
-            file_name = program_name if program_name.lower().endswith('.rdf') else f"{program_name}.rdf"
-        elif not file_name or file_name == '.' or not file_name.lower().endswith('.rdf'):
-            file_name = "report.rdf"
+        # Keep the original file name on the server, don't rename it
+        if not file_name or file_name == '.' or not file_name.lower().endswith('.rdf'):
+            if program_name:
+                file_name = program_name if program_name.lower().endswith('.rdf') else f"{program_name}.rdf"
+            else:
+                file_name = "report.rdf"
                 
         dir_name = os.path.dirname(target_path) or "."
         candidate_remotes = [
@@ -8736,8 +8744,14 @@ def api_sftp_download_oracle_report():
             ssh.close()
             return jsonify({"success": False, "error": f"File '{file_name}' not found on server at {target_path}"})
             
+        import re
         db_name = db_sessions.get(active_session_key, {}).get('alias', 'UNKNOWN_DB')
-        report_name_folder = os.path.splitext(file_name)[0]
+        if folder_name:
+            safe_folder = re.sub(r'[\\/*?:"<>|]', "", folder_name).strip()
+            report_name_folder = safe_folder or os.path.splitext(file_name)[0]
+        else:
+            report_name_folder = os.path.splitext(file_name)[0]
+            
         output_folder = os.path.join(r"D:\WORK\WORK\RDF", db_name, report_name_folder)
         if not os.path.exists(output_folder):
             os.makedirs(output_folder)
@@ -8987,6 +9001,7 @@ def api_download_template():
     global active_session_key, db_sessions
     data = request.json or {}
     template_code = data.get("template_code", "").strip()
+    folder_name = data.get("folder_name", "").strip()
     
     if not template_code:
         return jsonify({"success": False, "error": "No template code provided"})
@@ -9007,8 +9022,10 @@ def api_download_template():
         
         cursor.execute(sql_query, template_code=template_code)
         
+        import re
         db_name = db_sessions.get(active_session_key, {}).get('alias', 'UNKNOWN_DB')
-        output_folder = os.path.join(r"D:\WORK\WORK\TEMPLATE", db_name, template_code)
+        safe_folder = re.sub(r'[\\/*?:"<>|]', "", folder_name).strip() if folder_name else template_code
+        output_folder = os.path.join(r"D:\WORK\WORK\TEMPLATE", db_name, safe_folder or template_code)
         if not os.path.exists(output_folder):
             os.makedirs(output_folder)
             
@@ -9036,7 +9053,7 @@ def api_download_template():
                     f.write(blob_data)
                 
                 try:
-                    git_report_save(db_name, "TEMPLATE", template_code, file_name, blob_data)
+                    git_report_save(db_name, "TEMPLATE", safe_folder or template_code, file_name, blob_data)
                 except Exception:
                     pass
                     
