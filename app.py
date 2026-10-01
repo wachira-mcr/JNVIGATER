@@ -7792,6 +7792,9 @@ echo "Upload complete! Log saved to: $LOG" | tee -a "$LOG"
         except Exception:
             pass
 
+    # 5. Extract PKG DDL if applicable
+    _extract_pkg_files_to_dir(prog, app_short, out_dir, src_profile, db_sessions, profiles)
+
     return jsonify({
         "success": True,
         "folder": out_dir,
@@ -7800,6 +7803,63 @@ echo "Upload complete! Log saved to: $LOG" | tee -a "$LOG"
         "src_jdbc": src_jdbc,
         "tgt_jdbc": tgt_jdbc
     })
+
+def _extract_pkg_files_to_dir(prog, app_short, out_dir, profile_key, db_sess, profs):
+    log_lines = []
+    downloaded = []
+    try:
+        p = profs.get(profile_key) or db_sess.get(profile_key)
+        if not p: return log_lines, downloaded
+        
+        conn = create_connection(p["host"], p["port"], p.get("service_name"), p.get("sid"), p["user"], p["password"])
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT fe.execution_method_code, fe.execution_file_name
+            FROM fnd_concurrent_programs fcp, fnd_executables fe
+            WHERE fcp.executable_id = fe.executable_id
+              AND fcp.concurrent_program_name = :prog
+              AND fcp.application_id = (SELECT application_id FROM fnd_application WHERE application_short_name = :app_short)
+        """, prog=prog, app_short=app_short)
+        row = cursor.fetchone()
+        
+        if row:
+            exec_method, exec_file = row[0], row[1]
+            if exec_method == 'I' and exec_file:
+                log_lines.append(f"\n--- [PKG] Extracting DB Package: {exec_file} ---")
+                
+                cursor.execute("SELECT owner FROM all_objects WHERE object_name = :name AND object_type IN ('PACKAGE', 'PACKAGE BODY') FETCH FIRST 1 ROWS ONLY", name=exec_file.upper())
+                owner_row = cursor.fetchone()
+                owner = owner_row[0] if owner_row else None
+                
+                cursor.execute("""
+                    BEGIN
+                        DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM, 'PRETTY', true);
+                        DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM, 'SQLTERMINATOR', true);
+                    END;
+                """)
+                for obj_type, ext in [('PACKAGE', 'pks'), ('PACKAGE_BODY', 'pkb')]:
+                    try:
+                        if owner:
+                            cursor.execute(f"SELECT DBMS_METADATA.GET_DDL('{obj_type}', :name, :schema) FROM DUAL", name=exec_file.upper(), schema=owner)
+                        else:
+                            cursor.execute(f"SELECT DBMS_METADATA.GET_DDL('{obj_type}', :name) FROM DUAL", name=exec_file.upper())
+                        
+                        clob = cursor.fetchone()[0]
+                        text = clob.read() if hasattr(clob, 'read') else str(clob)
+                        if text:
+                            fpath = os.path.join(out_dir, f"{exec_file.upper()}.{ext}")
+                            with open(fpath, "w", encoding="utf-8") as f:
+                                f.write(text.strip() + "\n/\n")
+                            downloaded.append(f"{exec_file.upper()}.{ext}")
+                            log_lines.append(f"  ✓ Saved {ext.upper()}: {exec_file.upper()}.{ext}")
+                    except Exception as ex:
+                        log_lines.append(f"  ✗ Failed to get {obj_type}: {ex}")
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        log_lines.append(f"[WARN] DB PKG extraction step failed: {e}")
+        
+    return log_lines, downloaded
 
 @app.route("/api/fndload/run_download", methods=["POST"])
 def api_fndload_run_download():
@@ -7908,6 +7968,11 @@ def api_fndload_run_download():
             f"REQUEST_GROUP REQUEST_GROUP_NAME='' "
             f"APPLICATION_SHORT_NAME={app_short} "
             f"REQUEST_GROUP_UNIT UNIT_NAME={prog}")
+
+        # 5. DB Package Extract (if PKG)
+        pkg_logs, pkg_files = _extract_pkg_files_to_dir(prog, app_short, out_dir, src_profile or active_session_key, db_sessions, profiles)
+        if pkg_logs: log_lines.extend(pkg_logs)
+        if pkg_files: downloaded.extend(pkg_files)
 
         # Pull files back
         log_lines.append(f"\n--- Pulling files from {remote_tmp} ---")
@@ -9208,6 +9273,10 @@ def api_fndload_upload_folder():
             f"-LOB_CODE {ds_code} -LANGUAGE en -TERRITORY TH -XDO_FILE_TYPE RTF -FILE_CONTENT_TYPE 'application/rtf' "
             f"-FILE_NAME \"$f\" -CUSTOM_MODE FORCE; "
             f"done", timeout=300)
+
+        run(f"cd {remote_tmp} && for f in *.pks *.pkb *.sql; do [ -e \"$f\" ] || continue; "
+            f"echo \"exit\" | sqlplus -S apps/{apps_pass} @\"$f\"; "
+            f"done")
 
         run(f"cd {remote_tmp} && for f in GROUP_*.ldt; do [ -e \"$f\" ] || continue; "
             f"$FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y UPLOAD $FND_TOP/patch/115/import/afcpreqg.lct \"$f\" UPLOAD_MODE=REPLACE CUSTOM_MODE=FORCE; "
