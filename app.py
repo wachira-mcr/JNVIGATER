@@ -6915,8 +6915,8 @@ HTML_TEMPLATE = r"""
             if (!basePath) return;
             currentUploadRdfBasePath = basePath;
             
-            const sessionSelect = document.getElementById('sessionSelect');
-            const siteName = sessionSelect.options[sessionSelect.selectedIndex].text.toUpperCase();
+            const sessionSelect = document.getElementById('dbSessionSelect');
+            const siteName = sessionSelect && sessionSelect.selectedIndex >= 0 ? sessionSelect.options[sessionSelect.selectedIndex].text.toUpperCase() : '';
             
             if (siteName.includes('SME')) {
                 document.getElementById('rdfConfirmModal').style.display = 'flex';
