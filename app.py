@@ -7727,6 +7727,7 @@ EXIT;
 SQLEOF
 while IFS= read -r cmd; do [ -n "$cmd" ] && eval "$cmd" >> "$LOG" 2>&1 && echo "  [OK]" || echo "  [FAIL]"; done < /tmp/fnd_grp_down.tmp
 
+rm -f "$WORK_DIR"/L*.log "$WORK_DIR"/O*.out 2>/dev/null
 echo "Done! Files generated:" | tee -a "$LOG"
 ls -1 $WORK_DIR/*.ldt $WORK_DIR/*.rtf $WORK_DIR/*.xsl 2>/dev/null | tee -a "$LOG"
 """
@@ -7787,6 +7788,7 @@ for f in "$WORK_DIR"/GROUP_*.ldt; do
   echo "  >> Uploading: $(basename "$f")" | tee -a "$LOG"
   FNDLOAD $DB_USER/$DB_PASS 0 Y UPLOAD $FND_TOP/patch/115/import/afcpreqg.lct "$f" UPLOAD_MODE=REPLACE CUSTOM_MODE=FORCE >> "$LOG" 2>&1
 done
+rm -f "$WORK_DIR"/L*.log "$WORK_DIR"/O*.out 2>/dev/null
 echo "Upload complete! Log saved to: $LOG" | tee -a "$LOG"
 """
     with open(os.path.join(out_dir, "upload.sh"), "w", encoding="utf-8", newline="\n") as f:
@@ -8021,6 +8023,9 @@ SQLEOF
                 find_cmd = f"f=$(find $APPL_TOP -type f -name '{exec_file}' -o -name '{exec_file.lower()}' -o -name '{exec_file}.prog' 2>/dev/null | grep -E '/bin/' | head -n 1); if [ -n \"$f\" ]; then cp \"$f\" {remote_tmp}/; else echo 'Host not found'; fi"
                 run(find_cmd)
 
+        # Clean up L*.log
+        run(f"cd {remote_tmp} && rm -f L*.log O*.out fnd_rtf_down.tmp 2>/dev/null")
+
         # Pull files back
         log_lines.append(f"\n--- Pulling files from {remote_tmp} ---")
         try:
@@ -8029,6 +8034,7 @@ SQLEOF
             remote_files = []
 
         for fname in remote_files:
+            if fname.endswith('.tmp'): continue
             rpath = f"{remote_tmp}/{fname}"
             lpath = os.path.join(out_dir, fname)
             try:
