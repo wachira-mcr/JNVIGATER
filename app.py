@@ -8012,15 +8012,14 @@ SQLEOF
             run(f"echo '===JNAV==='; echo ${app_short}_TOP")
             if exec_method == 'P':
                 base_exec = exec_file.split('/')[-1] if '/' in exec_file else exec_file
-                run(f"cp ${app_short}_TOP/reports/US/{exec_file}.rdf {remote_tmp}/ 2>/dev/null || "
-                    f"cp ${app_short}_TOP/reports/US/{base_exec}.rdf {remote_tmp}/ 2>/dev/null || "
-                    f"cp ${app_short}_TOP/reports/US/custom/{base_exec}.rdf {remote_tmp}/ 2>/dev/null || "
-                    f"cp ${app_short}_TOP/reports/custom/US/{base_exec}.rdf {remote_tmp}/ 2>/dev/null || echo 'RDF not found'")
+                find_cmd = f"f=$(find $APPL_TOP -type f -name '{base_exec}.rdf' -o -name '{base_exec.upper()}.rdf' -o -name '{base_exec.lower()}.rdf' 2>/dev/null | head -n 1); if [ -n \"$f\" ]; then cp \"$f\" {remote_tmp}/; else echo 'RDF not found'; fi"
+                run(find_cmd)
             elif exec_method == 'Q':
-                run(f"cp ${app_short}_TOP/sql/{exec_file}.sql {remote_tmp}/ 2>/dev/null || echo 'SQL not found'")
+                find_cmd = f"f=$(find $APPL_TOP -type f -name '{exec_file}.sql' -o -name '{exec_file.lower()}.sql' 2>/dev/null | head -n 1); if [ -n \"$f\" ]; then cp \"$f\" {remote_tmp}/; else echo 'SQL not found'; fi"
+                run(find_cmd)
             elif exec_method == 'H':
-                run(f"cp ${app_short}_TOP/bin/{exec_file} {remote_tmp}/ 2>/dev/null || echo 'Host not found'")
-                run(f"cp ${app_short}_TOP/bin/{exec_file}.prog {remote_tmp}/ 2>/dev/null")
+                find_cmd = f"f=$(find $APPL_TOP -type f -name '{exec_file}' -o -name '{exec_file.lower()}' -o -name '{exec_file}.prog' 2>/dev/null | grep -E '/bin/' | head -n 1); if [ -n \"$f\" ]; then cp \"$f\" {remote_tmp}/; else echo 'Host not found'; fi"
+                run(find_cmd)
 
         # Pull files back
         log_lines.append(f"\n--- Pulling files from {remote_tmp} ---")
