@@ -8001,7 +8001,11 @@ SQLEOF
             log_lines.append(f"\n--- [6/6] Execution File ({exec_method}) ---")
             run(f"echo '===JNAV==='; echo ${app_short}_TOP")
             if exec_method == 'P':
-                run(f"cp ${app_short}_TOP/reports/US/{exec_file}.rdf {remote_tmp}/ 2>/dev/null || echo 'RDF not found'")
+                base_exec = exec_file.split('/')[-1] if '/' in exec_file else exec_file
+                run(f"cp ${app_short}_TOP/reports/US/{exec_file}.rdf {remote_tmp}/ 2>/dev/null || "
+                    f"cp ${app_short}_TOP/reports/US/{base_exec}.rdf {remote_tmp}/ 2>/dev/null || "
+                    f"cp ${app_short}_TOP/reports/US/custom/{base_exec}.rdf {remote_tmp}/ 2>/dev/null || "
+                    f"cp ${app_short}_TOP/reports/custom/US/{base_exec}.rdf {remote_tmp}/ 2>/dev/null || echo 'RDF not found'")
             elif exec_method == 'Q':
                 run(f"cp ${app_short}_TOP/sql/{exec_file}.sql {remote_tmp}/ 2>/dev/null || echo 'SQL not found'")
             elif exec_method == 'H':
