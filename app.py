@@ -5776,7 +5776,8 @@ HTML_TEMPLATE = r"""
                         tmpl_code: tmplCode,
                         src_profile: srcProfile,
                         tgt_profile: tgtProfile,
-                        output_dir: outDir
+                        output_dir: outDir,
+                        folder_name: document.getElementById('fndProgName').value.trim()
                     })
                 });
                 const data = await res.json();
@@ -5788,7 +5789,8 @@ HTML_TEMPLATE = r"""
                     window._lastFndParams = {
                         program_name: prog, app_short_name: appShort,
                         ds_code: dsCode, tmpl_code: tmplCode,
-                        src_profile: srcProfile, output_dir: outDir
+                        src_profile: srcProfile, output_dir: outDir,
+                        folder_name: document.getElementById('fndProgName').value.trim()
                     };
                     statusMsg.innerHTML = `
                         <div style="background:rgba(63, 185, 80, 0.1); border:1px solid rgba(63, 185, 80, 0.3); color:#3fb950; padding:12px; border-radius:6px;">
@@ -7585,7 +7587,11 @@ def api_fndload_generate():
     src_jdbc, src_user, src_pass = resolve_info(src_profile)
     tgt_jdbc, tgt_user, tgt_pass = resolve_info(tgt_profile)
     
-    out_dir = os.path.join(base_dir, prog)
+    import re
+    folder_name = data.get('folder_name', '').strip()
+    safe_folder = re.sub(r'[\\/*?:"<>|]', '', folder_name).strip() if folder_name else prog
+    db_name = src_profile or active_session_key or 'UNKNOWN_DB'
+    out_dir = os.path.join(base_dir, db_name, safe_folder)
     os.makedirs(out_dir, exist_ok=True)
     
     # 1. config.cfg
@@ -7914,7 +7920,11 @@ def api_fndload_run_download():
     src_jdbc = resolve_jdbc(src_profile or active_session_key)
     apps_pass = resolve_pass(src_profile or active_session_key)
 
-    out_dir = os.path.join(base_dir, prog)
+    import re
+    folder_name = data.get('folder_name', '').strip()
+    safe_folder = re.sub(r'[\\/*?:"<>|]', '', folder_name).strip() if folder_name else prog
+    db_name = src_profile or active_session_key or 'UNKNOWN_DB'
+    out_dir = os.path.join(base_dir, db_name, safe_folder)
     os.makedirs(out_dir, exist_ok=True)
 
     # Remote temp dir
