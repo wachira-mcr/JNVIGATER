@@ -7814,7 +7814,7 @@ def _extract_pkg_files_to_dir(prog, app_short, out_dir, profile_key, db_sess, pr
     downloaded = []
     try:
         p = profs.get(profile_key) or db_sess.get(profile_key)
-        if not p: return log_lines, downloaded
+        if not p: return log_lines, downloaded, None, None
         
         conn = create_connection(p["host"], p["port"], p.get("service_name"), p.get("sid"), p["user"], p["password"])
         cursor = conn.cursor()
@@ -7864,7 +7864,7 @@ def _extract_pkg_files_to_dir(prog, app_short, out_dir, profile_key, db_sess, pr
     except Exception as e:
         log_lines.append(f"[WARN] DB PKG extraction step failed: {e}")
         
-    return log_lines, downloaded
+    return log_lines, downloaded, exec_method if 'exec_method' in locals() else None, exec_file if 'exec_file' in locals() else None
 
 @app.route("/api/fndload/run_download", methods=["POST"])
 def api_fndload_run_download():
@@ -7955,12 +7955,29 @@ def api_fndload_run_download():
 
         # 3. RTF Templates (XDOLoader)
         log_lines.append(f"\n--- [3/4] RTF Templates ---")
-        run(f"cd {remote_tmp} && java oracle.apps.xdo.oa.util.XDOLoader DOWNLOAD "
-            f"-DB_USERNAME apps -DB_PASSWORD {apps_pass} "
-            f"-JDBC_CONNECTION {src_jdbc} "
-            f"-LOB_TYPE TEMPLATE -APPS_SHORT_NAME {app_short} "
-            f"-LOB_CODE {ds_code} -LANGUAGE en -TERRITORY TH "
-            f"2>&1 | head -100", timeout=180)
+        xdo_sql = f"""sqlplus -S apps/{apps_pass} << 'SQLEOF' > {remote_tmp}/fnd_rtf_down.tmp
+SET PAGESIZE 0 FEEDBACK OFF VERIFY OFF HEADING OFF ECHO OFF TRIMSPOOL ON LINESIZE 32767 WRAP OFF
+SPOOL {remote_tmp}/fnd_rtf_down.tmp
+SELECT 'java oracle.apps.xdo.oa.util.XDOLoader DOWNLOAD'
+    || ' -DB_USERNAME apps'
+    || ' -DB_PASSWORD {apps_pass}'
+    || ' -JDBC_CONNECTION ''{src_jdbc}'''
+    || ' -LOB_TYPE '        || XDO.LOB_TYPE
+    || ' -APPS_SHORT_NAME ' || XDO.APPLICATION_SHORT_NAME
+    || ' -LOB_CODE '        || XDO.LOB_CODE
+    || ' -LANGUAGE '        || XDO.LANGUAGE
+    || ' -TERRITORY '       || XDO.TERRITORY
+FROM XDO_TEMPLATES_B XTB, XDO_TEMPLATES_TL XTT, XDO_LOBS XDO
+WHERE XTT.APPLICATION_SHORT_NAME  = XTB.APPLICATION_SHORT_NAME
+AND XTB.TEMPLATE_CODE             = XTT.TEMPLATE_CODE
+AND XTB.TEMPLATE_CODE(+)          = XDO.LOB_CODE
+AND XDO.LOB_CODE                  IN ('{ds_code}', '{tmpl_code}');
+SPOOL OFF
+EXIT;
+SQLEOF
+"""
+        run(xdo_sql)
+        run(f"cd {remote_tmp} && while IFS= read -r cmd; do [ -n \"$cmd\" ] && eval \"$cmd\" 2>&1 | head -100; done < {remote_tmp}/fnd_rtf_down.tmp", timeout=180)
         
         # Rename templates to program name
         run(f"cd {remote_tmp} && for f in *.rtf; do [ -e \"$f\" ] && mv \"$f\" \"{prog}.rtf\"; done")
@@ -7975,9 +7992,21 @@ def api_fndload_run_download():
             f"REQUEST_GROUP_UNIT UNIT_NAME={prog}")
 
         # 5. DB Package Extract (if PKG)
-        pkg_logs, pkg_files = _extract_pkg_files_to_dir(prog, app_short, out_dir, src_profile or active_session_key, db_sessions, profiles)
+        pkg_logs, pkg_files, exec_method, exec_file = _extract_pkg_files_to_dir(prog, app_short, out_dir, src_profile or active_session_key, db_sessions, profiles)
         if pkg_logs: log_lines.extend(pkg_logs)
         if pkg_files: downloaded.extend(pkg_files)
+
+        # 6. Execution File (RDF, SQL, Host) via SFTP
+        if exec_method in ('P', 'Q', 'H') and exec_file:
+            log_lines.append(f"\n--- [6/6] Execution File ({exec_method}) ---")
+            run(f"echo '===JNAV==='; echo ${app_short}_TOP")
+            if exec_method == 'P':
+                run(f"cp ${app_short}_TOP/reports/US/{exec_file}.rdf {remote_tmp}/ 2>/dev/null || echo 'RDF not found'")
+            elif exec_method == 'Q':
+                run(f"cp ${app_short}_TOP/sql/{exec_file}.sql {remote_tmp}/ 2>/dev/null || echo 'SQL not found'")
+            elif exec_method == 'H':
+                run(f"cp ${app_short}_TOP/bin/{exec_file} {remote_tmp}/ 2>/dev/null || echo 'Host not found'")
+                run(f"cp ${app_short}_TOP/bin/{exec_file}.prog {remote_tmp}/ 2>/dev/null")
 
         # Pull files back
         log_lines.append(f"\n--- Pulling files from {remote_tmp} ---")
