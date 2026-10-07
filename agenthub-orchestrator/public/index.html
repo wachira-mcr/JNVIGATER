@@ -1,0 +1,2931 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Antigravity Multi-Agent Commander</title>
+  <style>
+    /* ══════════════════════════════════════════════════════════════════════════
+       ANTIGRAVITY / VS CODE DARK MODERN DESIGN SYSTEM (ZERO-CDN OFFLINE)
+       ══════════════════════════════════════════════════════════════════════════ */
+    :root {
+      /* VS Code Workbench Tokens */
+      --bg-app: #1e1e1e;
+      --bg-sidebar: #252526;
+      --bg-panel: #202020;
+      --bg-input: #2d2d30;
+      --bg-hover: #2a2d2e;
+      --bg-active: #094771;
+      --border: #333335;
+      --border-subtle: #2a2a2c;
+      --text-primary: #cccccc;
+      --text-secondary: #969696;
+      --text-muted: #6b6b6b;
+      --accent-blue: #007acc;
+      --accent-hover: #1e8fe1;
+      --accent-green: #4ec9b0;
+      --amber: #cca700;
+      --purple: #c586c0;
+      --sidebar-icon: 44px;
+
+      /* Role Accents */
+      --agent-lead: #e2a84b;
+      --agent-lead-bg: rgba(226, 168, 75, 0.12);
+      --agent-lead-border: rgba(226, 168, 75, 0.35);
+
+      --agent-w1: #007acc;
+      --agent-w1-bg: rgba(0, 122, 204, 0.12);
+      --agent-w1-border: rgba(0, 122, 204, 0.35);
+
+      --agent-w2: #4ec9b0;
+      --agent-w2-bg: rgba(78, 201, 176, 0.12);
+      --agent-w2-border: rgba(78, 201, 176, 0.35);
+
+      --agent-w3: #b48ead;
+      --agent-w3-bg: rgba(180, 142, 173, 0.12);
+      --agent-w3-border: rgba(180, 142, 173, 0.35);
+
+      --agent-dispatcher: #2dd4bf;
+      --agent-dispatcher-bg: rgba(45, 212, 191, 0.12);
+      --agent-dispatcher-border: rgba(45, 212, 191, 0.35);
+
+      --agent-human: #818cf8;
+      --agent-human-bg: rgba(129, 140, 248, 0.12);
+      --agent-human-border: rgba(129, 140, 248, 0.35);
+
+      --agent-sys: #858585;
+      --agent-sys-bg: rgba(133, 133, 133, 0.10);
+      --agent-sys-border: rgba(133, 133, 133, 0.25);
+
+      /* Liveness States */
+      --status-running: #4ec9b0;
+      --status-stopped: #6a737d;
+      --status-error: #f48771;
+    }
+
+    /* ── Reset & Typography ─────────────────────────────────────────────────── */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      scrollbar-width: thin;
+      scrollbar-color: #424242 transparent;
+    }
+
+    *::-webkit-scrollbar { width: 8px; height: 8px; }
+    *::-webkit-scrollbar-track { background: transparent; }
+    *::-webkit-scrollbar-thumb { background: #424242; border-radius: 4px; }
+    *::-webkit-scrollbar-thumb:hover { background: #555555; }
+
+    html, body {
+      height: 100%;
+      width: 100%;
+      background: var(--bg-app);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans Thai", sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+      overflow: hidden;
+      user-select: none;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── App Shell Grid ─────────────────────────────────────────────────────── */
+    #shell {
+      display: grid;
+      grid-template-columns: var(--sidebar-icon) 260px 1fr;
+      grid-template-rows: 1fr 22px;
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+    }
+
+    /* ── 1. Activity Bar (44px rail) ────────────────────────────────────────── */
+    #activity-bar {
+      grid-column: 1;
+      grid-row: 1;
+      width: var(--sidebar-icon);
+      background: #181818;
+      border-right: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding-top: 4px;
+      z-index: 30;
+    }
+
+    .activity-icon {
+      width: var(--sidebar-icon);
+      height: var(--sidebar-icon);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: var(--text-muted);
+      position: relative;
+      transition: color 0.12s ease-in-out, background 0.12s ease-in-out;
+    }
+    .activity-icon:hover {
+      color: var(--text-primary);
+    }
+    .activity-icon.active {
+      color: #ffffff;
+      border-left: 2px solid var(--accent-blue);
+    }
+    .activity-icon svg {
+      width: 22px;
+      height: 22px;
+    }
+
+    .activity-bottom {
+      margin-top: auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding-bottom: 8px;
+    }
+
+    .user-avatar-badge {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #007acc, #6366f1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      color: #ffffff;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+    }
+
+    /* ── 2. Collapsible Left Sidebar ────────────────────────────────────────── */
+    #sidebar {
+      grid-column: 2;
+      grid-row: 1;
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      z-index: 20;
+    }
+
+    .sidebar-header {
+      height: 35px;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .sidebar-scroll {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    /* Accordion Section */
+    .accordion-section {
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .accordion-header {
+      height: 28px;
+      background: #1f1f1f;
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      cursor: pointer;
+      user-select: none;
+      gap: 6px;
+      transition: background 0.1s, color 0.1s;
+    }
+    .accordion-header:hover {
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text-primary);
+    }
+    .accordion-header svg.chevron {
+      width: 14px;
+      height: 14px;
+      transition: transform 0.15s ease;
+      color: var(--text-muted);
+    }
+    .accordion-header.collapsed svg.chevron {
+      transform: rotate(-90deg);
+    }
+    .accordion-content {
+      padding: 4px 6px;
+    }
+    .accordion-content.collapsed {
+      display: none !important;
+    }
+
+    /* Workspace Pill */
+    .ws-pill-box {
+      padding: 6px 4px;
+    }
+    .ws-pill {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 4px 8px;
+      font-size: 11px;
+      font-family: 'Cascadia Code', 'Consolas', monospace;
+      color: #9cdcfe;
+      cursor: pointer;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .ws-pill:hover {
+      border-color: var(--accent-blue);
+      background: var(--bg-hover);
+    }
+
+    /* Sidebar Navigation Button */
+    .sidebar-btn {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      color: var(--text-primary);
+      cursor: pointer;
+      border-radius: 3px;
+      font-size: 12px;
+      transition: background 0.1s;
+      white-space: nowrap;
+      margin: 1px 0;
+    }
+    .sidebar-btn:hover { background: var(--bg-hover); }
+    .sidebar-btn.active {
+      background: #094771;
+      color: #ffffff;
+      font-weight: 500;
+    }
+    .sidebar-btn svg { width: 15px; height: 15px; flex-shrink: 0; color: var(--text-secondary); }
+    .sidebar-btn.active svg { color: #ffffff; }
+
+    /* Profile / Agent Sidebar Card */
+    .profile-card {
+      margin: 2px 0;
+      padding: 6px 8px;
+      background: rgba(255, 255, 255, 0.015);
+      border: 1px solid var(--border-subtle);
+      border-radius: 3px;
+      cursor: pointer;
+      transition: all 0.12s ease;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .profile-card:hover {
+      background: var(--bg-hover);
+      border-color: var(--border);
+    }
+    .profile-card .name {
+      font-weight: 600;
+      font-size: 12px;
+      color: var(--text-primary);
+    }
+    .profile-card .role {
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+
+    /* Sidebar status dot */
+    .sidebar-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--status-stopped);
+      box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+    }
+    .sidebar-dot.running {
+      background: var(--status-running);
+      box-shadow: 0 0 5px var(--status-running);
+    }
+    .sidebar-pid {
+      margin-left: auto;
+      font-size: 10px;
+      font-family: 'Cascadia Code', 'Consolas', monospace;
+      color: var(--text-muted);
+      background: rgba(255, 255, 255, 0.05);
+      padding: 1px 4px;
+      border-radius: 2px;
+    }
+    .sidebar-pid.running {
+      color: var(--status-running);
+      background: rgba(78, 201, 176, 0.12);
+    }
+
+    /* Sidebar footer buttons */
+    .sidebar-footer {
+      padding: 8px;
+      border-top: 1px solid var(--border);
+      background: #1e1e1e;
+      flex-shrink: 0;
+    }
+
+    /* ── 3. Main Workspace Area ─────────────────────────────────────────────── */
+    #main {
+      grid-column: 3;
+      grid-row: 1;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-app);
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Tab Bar */
+    #tab-bar {
+      display: flex;
+      align-items: center;
+      background: #181818;
+      border-bottom: 1px solid var(--border);
+      height: 35px;
+      flex-shrink: 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+
+    .tab {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 14px;
+      height: 35px;
+      font-size: 12px;
+      cursor: pointer;
+      color: var(--text-secondary);
+      background: #181818;
+      border-right: 1px solid var(--border);
+      white-space: nowrap;
+      transition: all 0.1s ease;
+      position: relative;
+    }
+    .tab:hover {
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .tab.active {
+      color: #ffffff;
+      background: var(--bg-app);
+      border-top: 2px solid var(--accent-blue);
+      font-weight: 500;
+    }
+    .tab svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    .tab-actions {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      padding-right: 10px;
+      gap: 4px;
+    }
+
+    /* Breadcrumbs */
+    #breadcrumb {
+      height: 24px;
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      font-size: 11px;
+      color: var(--text-muted);
+      gap: 5px;
+      flex-shrink: 0;
+    }
+    #breadcrumb span {
+      color: var(--text-secondary);
+    }
+
+    /* ── Content Area & Panels ──────────────────────────────────────────────── */
+    #content-container {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+      position: relative;
+    }
+
+    #content-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Views */
+    #view-chat {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 12px 24px;
+      scroll-behavior: smooth;
+    }
+
+    #view-dispatch, #view-accounts, #view-board {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+    }
+
+    /* ── Chat Messages ──────────────────────────────────────────────────────── */
+    .chat-message {
+      display: flex;
+      gap: 12px;
+      padding: 10px 14px;
+      border-radius: 4px;
+      transition: background 0.1s ease;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+    }
+    .chat-message:hover {
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 4px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      font-weight: 700;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    }
+    .avatar.lead       { background: var(--agent-lead-bg); color: var(--agent-lead); border: 1px solid var(--agent-lead-border); }
+    .avatar.worker1    { background: var(--agent-w1-bg); color: var(--agent-w1); border: 1px solid var(--agent-w1-border); }
+    .avatar.worker2    { background: var(--agent-w2-bg); color: var(--agent-w2); border: 1px solid var(--agent-w2-border); }
+    .avatar.worker3    { background: var(--agent-w3-bg); color: var(--agent-w3); border: 1px solid var(--agent-w3-border); }
+    .avatar.dispatcher { background: var(--agent-dispatcher-bg); color: var(--agent-dispatcher); border: 1px solid var(--agent-dispatcher-border); }
+    .avatar.human      { background: var(--agent-human-bg); color: var(--agent-human); border: 1px solid var(--agent-human-border); }
+    .avatar.system     { background: var(--agent-sys-bg); color: var(--agent-sys); border: 1px solid var(--agent-sys-border); }
+
+    .chat-body {
+      flex: 1;
+      min-width: 0;
+    }
+    .chat-sender {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+    .sender-name {
+      font-weight: 600;
+      font-size: 12px;
+      color: var(--text-primary);
+    }
+    .badge {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 3px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .badge-lead       { background: var(--agent-lead-bg); color: var(--agent-lead); }
+    .badge-w1         { background: var(--agent-w1-bg); color: #4fc3f7; }
+    .badge-w2         { background: var(--agent-w2-bg); color: var(--agent-w2); }
+    .badge-w3         { background: var(--agent-w3-bg); color: var(--agent-w3); }
+    .badge-dispatcher { background: var(--agent-dispatcher-bg); color: var(--agent-dispatcher); }
+    .badge-human      { background: var(--agent-human-bg); color: #a5b4fc; }
+    .badge-sys        { background: var(--agent-sys-bg); color: #999999; }
+
+    .chat-time {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    .chat-text {
+      color: var(--text-primary);
+      line-height: 1.6;
+      word-break: break-word;
+      font-size: 13px;
+    }
+    .chat-text p {
+      margin-bottom: 6px;
+    }
+    .chat-text p:last-child {
+      margin-bottom: 0;
+    }
+
+    /* ── Code Fences with Syntax Tokens & Copy Button ───────────────────────── */
+    .code-block {
+      margin: 8px 0;
+      background: #141414;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .code-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #1f1f1f;
+      padding: 3px 10px;
+      border-bottom: 1px solid var(--border);
+      font-family: 'Cascadia Code', 'Consolas', monospace;
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+    .code-copy-btn {
+      background: transparent;
+      border: 1px solid #444;
+      color: var(--text-secondary);
+      border-radius: 3px;
+      padding: 2px 7px;
+      font-size: 11px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s ease;
+    }
+    .code-copy-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #ffffff;
+      border-color: #666;
+    }
+    .code-copy-btn.copied {
+      border-color: var(--accent-green);
+      color: var(--accent-green);
+    }
+    .code-block pre {
+      padding: 10px 12px;
+      margin: 0;
+      font-family: 'Cascadia Code', 'Consolas', monospace;
+      font-size: 12px;
+      line-height: 1.55;
+      overflow-x: auto;
+      color: #d4d4d4;
+      white-space: pre;
+    }
+
+    /* Syntax Highlighting Tokens */
+    .tok-keyword  { color: #c586c0; font-weight: 600; }
+    .tok-string   { color: #ce9178; }
+    .tok-comment  { color: #6a9955; font-style: italic; }
+    .tok-constant { color: #569cd6; }
+    .tok-number   { color: #b5cea8; }
+
+    /* Inline Code */
+    code.inline-code, code {
+      background: #2d2d30;
+      border: 1px solid #3a3a3a;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-family: 'Cascadia Code', 'Consolas', monospace;
+      font-size: 12px;
+      color: #9cdcfe;
+    }
+
+    /* Markdown Tables */
+    .table-container {
+      margin: 10px 0;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+    }
+    .ag-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .ag-table th {
+      background: #252526;
+      color: var(--text-primary);
+      font-weight: 600;
+      text-align: left;
+      padding: 7px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .ag-table td {
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--border-subtle);
+      color: #bbbbbb;
+    }
+    .ag-table tr:nth-child(even) td {
+      background: rgba(255, 255, 255, 0.015);
+    }
+    .ag-table tr:hover td {
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    /* Markdown Blockquotes, Lists & Links */
+    .ag-quote {
+      border-left: 3px solid var(--accent-blue);
+      background: rgba(0, 122, 204, 0.08);
+      padding: 6px 12px;
+      margin: 6px 0;
+      color: var(--text-secondary);
+      border-radius: 0 3px 3px 0;
+    }
+    .ag-ul {
+      margin: 6px 0 6px 20px;
+      padding: 0;
+    }
+    .ag-li {
+      margin-bottom: 3px;
+    }
+    .ag-hr {
+      border: none;
+      border-top: 1px solid var(--border-subtle);
+      margin: 12px 0;
+    }
+    .ag-link {
+      color: #4fc3f7;
+      text-decoration: underline;
+    }
+    .ag-h2 {
+      font-size: 15px;
+      font-weight: 700;
+      color: #ffffff;
+      margin: 12px 0 6px;
+    }
+    .ag-h3 {
+      font-size: 13px;
+      font-weight: 700;
+      color: #e0e0e0;
+      margin: 10px 0 4px;
+    }
+    .ag-h4 {
+      font-size: 12px;
+      font-weight: 600;
+      color: #cccccc;
+      margin: 8px 0 3px;
+    }
+
+    /* ── Floating Scroll-to-Bottom Jump Pill ────────────────────────────────── */
+    #new-messages-pill {
+      position: absolute;
+      bottom: 18px;
+      right: 24px;
+      background: var(--accent-blue);
+      color: #ffffff;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+      border-radius: 16px;
+      padding: 6px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      z-index: 50;
+      transition: transform 0.15s ease, background 0.15s ease, opacity 0.15s ease;
+    }
+    #new-messages-pill:hover {
+      background: var(--accent-hover);
+      transform: translateY(-2px);
+    }
+    #new-messages-pill.hidden {
+      display: none !important;
+    }
+
+    /* ── Form Controls & UI Elements ────────────────────────────────────────── */
+    .panel-heading {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+
+    .ag-input {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--text-primary);
+      padding: 7px 10px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      width: 100%;
+      transition: border-color 0.15s;
+    }
+    .ag-input:focus { border-color: var(--accent-blue); }
+    .ag-input::placeholder { color: var(--text-muted); }
+
+    .ag-textarea {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--text-primary);
+      padding: 8px 10px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      width: 100%;
+      resize: vertical;
+      min-height: 95px;
+      transition: border-color 0.15s;
+      line-height: 1.5;
+    }
+    .ag-textarea:focus { border-color: var(--accent-blue); }
+    .ag-textarea::placeholder { color: var(--text-muted); }
+
+    .label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 5px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .ag-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 3px;
+      border: none;
+      font-size: 12px;
+      font-family: inherit;
+      cursor: pointer;
+      font-weight: 500;
+      transition: background 0.1s, opacity 0.1s;
+    }
+    .ag-btn:active { opacity: 0.85; }
+
+    .btn-primary {
+      background: var(--accent-blue);
+      color: #ffffff;
+    }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-primary:disabled {
+      background: #333335;
+      color: var(--text-muted);
+      cursor: not-allowed;
+    }
+
+    .btn-secondary {
+      background: var(--bg-input);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { background: var(--bg-hover); }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-secondary);
+      border: none;
+      padding: 4px 8px;
+    }
+    .btn-ghost:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+    /* Granular Dispatch Target Selector Chips */
+    .target-chips-group {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 14px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .target-chip {
+      padding: 5px 12px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--bg-input);
+      color: var(--text-secondary);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.12s ease;
+      user-select: none;
+    }
+    .target-chip:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+      border-color: #555555;
+    }
+    .target-chip.active {
+      background: #094771;
+      border-color: var(--accent-blue);
+      color: #ffffff;
+      box-shadow: 0 0 8px rgba(0, 122, 204, 0.4);
+    }
+
+    /* Worker Task Column Cards */
+    .task-col {
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      transition: border-color 0.15s, opacity 0.15s;
+    }
+    .task-col.focused-worker {
+      border-color: var(--accent-blue) !important;
+      box-shadow: 0 0 10px rgba(0, 122, 204, 0.25);
+    }
+    .task-col.dimmed {
+      opacity: 0.6;
+    }
+    .task-col-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+    .task-col-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    /* Preset Buttons */
+    .preset-btn {
+      padding: 3px 9px;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      background: var(--bg-input);
+      color: var(--text-secondary);
+      font-size: 11px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.1s, color 0.1s, border-color 0.1s;
+    }
+    .preset-btn:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+      border-color: #555555;
+    }
+
+    /* ── Accounts View Launcher Cards ───────────────────────────────────────── */
+    .account-card {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      transition: border-color 0.15s ease;
+    }
+    .account-card:hover {
+      border-color: #444446;
+    }
+    .account-card-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .status-dot-pulse {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+      flex-shrink: 0;
+      transition: all 0.2s ease;
+    }
+    .status-dot-pulse.running {
+      background: var(--status-running);
+      box-shadow: 0 0 7px var(--status-running);
+      animation: pulse-ring 2s infinite ease-in-out;
+    }
+    .status-dot-pulse.stopped {
+      background: var(--status-stopped);
+    }
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.15); opacity: 1; }
+      100% { transform: scale(0.95); opacity: 0.8; }
+    }
+
+    .status-text {
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .status-text.running { color: var(--status-running); }
+    .status-text.stopped { color: var(--status-stopped); }
+
+    .pid-badge {
+      font-size: 10px;
+      font-family: 'Cascadia Code', 'Consolas', monospace;
+      padding: 2px 6px;
+      border-radius: 3px;
+      margin-left: auto;
+    }
+    .pid-badge.active {
+      background: rgba(78, 201, 176, 0.15);
+      color: var(--status-running);
+      border: 1px solid rgba(78, 201, 176, 0.35);
+    }
+    .pid-badge.inactive {
+      background: #2d2d30;
+      color: #777777;
+      border: 1px solid #3a3a3a;
+    }
+
+    /* ── Right Panel: Final Review ──────────────────────────────────────────── */
+    #right-panel {
+      width: 320px;
+      flex-shrink: 0;
+      background: var(--bg-panel);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .right-panel-header {
+      height: 35px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--text-secondary);
+      flex-shrink: 0;
+      gap: 8px;
+    }
+    #review-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      line-height: 1.65;
+    }
+
+    /* ── Bottom Chat Input Bar ──────────────────────────────────────────────── */
+    #bottom-bar {
+      background: var(--bg-app);
+      border-top: 1px solid var(--border);
+      padding: 10px 16px;
+      flex-shrink: 0;
+    }
+    .chat-input-row {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 8px 12px;
+      transition: border-color 0.15s;
+    }
+    .chat-input-row:focus-within {
+      border-color: var(--accent-blue);
+    }
+    #chat-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--text-primary);
+      font-size: 13px;
+      font-family: inherit;
+      line-height: 1.5;
+      resize: none;
+      min-height: 22px;
+      max-height: 120px;
+    }
+    #chat-input::placeholder {
+      color: var(--text-muted);
+    }
+
+    /* ── 5. Status Bar (22px Bottom Strip) ──────────────────────────────────── */
+    #status-bar {
+      grid-column: 1 / -1;
+      grid-row: 2;
+      background: var(--accent-blue);
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      gap: 14px;
+      font-size: 11px;
+      z-index: 40;
+    }
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .status-dot-static {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #89d185;
+    }
+
+    /* ── Toast Notification ─────────────────────────────────────────────────── */
+    #toast {
+      position: fixed;
+      bottom: 32px;
+      right: 20px;
+      background: #252526;
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent-blue);
+      padding: 9px 14px;
+      border-radius: 3px;
+      font-size: 12px;
+      max-width: 360px;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: opacity 0.2s, transform 0.2s;
+      pointer-events: none;
+      z-index: 200;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    }
+    #toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* ── Token Monitor & Resource Tracking ─────────────────────────────────── */
+    .token-monitor-container {
+      margin-top: 20px;
+    }
+    .token-select {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      border-radius: 3px;
+      padding: 3px 8px;
+      font-size: 11px;
+      outline: none;
+      cursor: pointer;
+    }
+    .token-select:focus {
+      border-color: var(--accent-blue);
+    }
+    .token-overview-card {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 14px 16px;
+    }
+    .token-threshold-badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .token-threshold-badge.normal {
+      background: rgba(78, 201, 176, 0.15);
+      color: #4ec9b0;
+      border: 1px solid rgba(78, 201, 176, 0.3);
+    }
+    .token-threshold-badge.warning {
+      background: rgba(204, 167, 0, 0.15);
+      color: #d7ba7d;
+      border: 1px solid rgba(204, 167, 0, 0.3);
+    }
+    .token-threshold-badge.alert {
+      background: rgba(244, 135, 113, 0.15);
+      color: #f48771;
+      border: 1px solid rgba(244, 135, 113, 0.3);
+    }
+    .token-bar-track {
+      width: 100%;
+      height: 8px;
+      background: #181818;
+      border-radius: 4px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      margin: 8px 0;
+    }
+    .token-bar-fill {
+      height: 100%;
+      transition: width 0.3s ease, background 0.3s ease;
+    }
+    .token-bar-fill.normal { background: #4ec9b0; }
+    .token-bar-fill.warning { background: #cca700; }
+    .token-bar-fill.alert { background: #f48771; }
+
+    .token-agent-card {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .token-agent-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+    .token-agent-val {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-primary);
+      font-family: 'Cascadia Code', 'Consolas', monospace;
+    }
+    .token-agent-sub {
+      font-size: 10px;
+      color: var(--text-muted);
+      margin-top: 2px;
+      margin-bottom: 6px;
+    }
+    .token-mini-track {
+      width: 100%;
+      height: 4px;
+      background: #181818;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .token-mini-fill {
+      height: 100%;
+      transition: width 0.3s ease;
+    }
+
+    .hidden { display: none !important; }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .animate-spin { animation: spin 1s linear infinite; }
+  </style>
+</head>
+<body>
+
+<div id="shell">
+
+  <!-- ══ 1. ACTIVITY BAR ══════════════════════════════════════════════════════ -->
+  <div id="activity-bar">
+    <!-- Antigravity Core / Swarm Logo -->
+    <div class="activity-icon active" id="act-chat" title="ห้องแชท Swarm (TEAM_CHAT.md)" onclick="switchView('chat')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+      </svg>
+    </div>
+
+    <!-- Accounts & Google Login Manager -->
+    <div class="activity-icon" id="act-accounts" title="จัดการ 4 บัญชี & Login Google" onclick="switchView('accounts')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+        <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/>
+        <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/>
+      </svg>
+    </div>
+
+    <!-- Dispatch Tasks -->
+    <div class="activity-icon" id="act-dispatch" title="กระจายงาน (Dispatch Tasks)" onclick="switchView('dispatch')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+        <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+      </svg>
+    </div>
+
+    <!-- Central Project Board -->
+    <div class="activity-icon" id="act-board" title="กระดานโปรเจกต์ (BOARD.md)" onclick="switchView('board')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+        <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+      </svg>
+    </div>
+
+    <!-- Bottom Actions -->
+    <div class="activity-bottom">
+      <div class="activity-icon" title="ตั้งค่าระบบ" onclick="showToast('การตั้งค่าพร้อมใช้งานผ่าน config.json')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+        </svg>
+      </div>
+      <div class="activity-icon" title="บัญชีผู้ควบคุม (Supervisor)">
+        <div class="user-avatar-badge">A</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ 2. COLLAPSIBLE SIDEBAR ═══════════════════════════════════════════════ -->
+  <div id="sidebar">
+    <div class="sidebar-header">
+      <span>ANTIGRAVITY HUB</span>
+      <svg style="width:14px;height:14px;cursor:pointer;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" onclick="changeWorkspace()" title="เปลี่ยน Workspace">
+        <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+      </svg>
+    </div>
+
+    <div class="sidebar-scroll">
+      <!-- Section 1: Workspace -->
+      <div class="accordion-section">
+        <div class="accordion-header" onclick="toggleAccordion(this)">
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          <span>WORKSPACE</span>
+        </div>
+        <div class="accordion-content">
+          <div class="ws-pill-box">
+            <div class="ws-pill" id="ws-label" onclick="changeWorkspace()" title="คลิกเพื่อสลับโฟลเดอร์โปรเจกต์">
+              <svg style="width:13px;height:13px;flex-shrink:0;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+              <span>กำลังโหลด...</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 2: Views -->
+      <div class="accordion-section">
+        <div class="accordion-header" onclick="toggleAccordion(this)">
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          <span>VIEWS & NAVIGATION</span>
+        </div>
+        <div class="accordion-content">
+          <div class="sidebar-btn active" id="sb-nav-chat" onclick="switchView('chat')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+            <span>ห้องแชท Swarm</span>
+          </div>
+          <div class="sidebar-btn" id="sb-nav-dispatch" onclick="switchView('dispatch')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            <span>กระจายงาน (Dispatch)</span>
+          </div>
+          <div class="sidebar-btn" id="sb-nav-accounts" onclick="switchView('accounts')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+            <span>จัดการ 4 บัญชี</span>
+          </div>
+          <div class="sidebar-btn" id="sb-nav-board" onclick="switchView('board')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            <span>กระดานโปรเจกต์ (Board)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 3: Swarm Agents & Process Liveness -->
+      <div class="accordion-section">
+        <div class="accordion-header" onclick="toggleAccordion(this)">
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          <span>SWARM AGENTS & STATUS</span>
+        </div>
+        <div class="accordion-content">
+          <!-- Lead -->
+          <div class="profile-card" onclick="launchInstance('lead')" title="คลิกเพื่อเปิดหน้าต่าง Team Lead">
+            <div class="sidebar-dot" id="sb-dot-lead"></div>
+            <div>
+              <div class="name">👑 Team Lead</div>
+              <div class="role">Lead & QA (เมลหลัก)</div>
+            </div>
+            <div class="sidebar-pid" id="sb-pid-lead">Off</div>
+          </div>
+
+          <!-- Worker 1 -->
+          <div class="profile-card" onclick="launchInstance('worker1')" title="คลิกเพื่อเปิดหน้าต่าง Worker 1">
+            <div class="sidebar-dot" id="sb-dot-worker1"></div>
+            <div>
+              <div class="name">🛠️ Worker 1</div>
+              <div class="role">Backend & Core (เมลที่ 2)</div>
+            </div>
+            <div class="sidebar-pid" id="sb-pid-worker1">Off</div>
+          </div>
+
+          <!-- Worker 2 -->
+          <div class="profile-card" onclick="launchInstance('worker2')" title="คลิกเพื่อเปิดหน้าต่าง Worker 2">
+            <div class="sidebar-dot" id="sb-dot-worker2"></div>
+            <div>
+              <div class="name">🎨 Worker 2</div>
+              <div class="role">Frontend & UI (เมลที่ 3)</div>
+            </div>
+            <div class="sidebar-pid" id="sb-pid-worker2">Off</div>
+          </div>
+
+          <!-- Worker 3 -->
+          <div class="profile-card" onclick="launchInstance('worker3')" title="คลิกเพื่อเปิดหน้าต่าง Worker 3">
+            <div class="sidebar-dot" id="sb-dot-worker3"></div>
+            <div>
+              <div class="name">🧪 Worker 3</div>
+              <div class="role">Testing & Docs (เมลที่ 4)</div>
+            </div>
+            <div class="sidebar-pid" id="sb-pid-worker3">Off</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 4: Presets -->
+      <div class="accordion-section">
+        <div class="accordion-header" onclick="toggleAccordion(this)">
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          <span>TASK PRESETS</span>
+        </div>
+        <div class="accordion-content" style="display:flex;flex-direction:column;gap:5px;padding:6px 8px;">
+          <button class="preset-btn" onclick="applyPreset('fullstack')" style="text-align:left;">📦 Full-Stack Web App</button>
+          <button class="preset-btn" onclick="applyPreset('ai')" style="text-align:left;">🧠 Data Pipeline & AI Service</button>
+          <button class="preset-btn" onclick="applyPreset('refactor')" style="text-align:left;">⚡ Refactor & Test Coverage</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick Launch All at Bottom -->
+    <div class="sidebar-footer">
+      <button class="ag-btn btn-primary" id="btn-launch-all-sidebar" style="width:100%;justify-content:center;" onclick="launchInstance('all')">
+        <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor"/></svg>
+        <span>เปิดพร้อมกัน 4 หน้าต่าง</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ══ 3. MAIN WORKSPACE ════════════════════════════════════════════════════ -->
+  <div id="main">
+
+    <!-- Tab Bar -->
+    <div id="tab-bar">
+      <div class="tab active" id="tab-chat" onclick="switchView('chat')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+        <span>TEAM_CHAT.md</span>
+      </div>
+      <div class="tab" id="tab-dispatch" onclick="switchView('dispatch')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        <span>Dispatch Tasks</span>
+      </div>
+      <div class="tab" id="tab-accounts" onclick="switchView('accounts')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+        <span>Accounts</span>
+      </div>
+      <div class="tab" id="tab-board" onclick="switchView('board')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        <span>BOARD.md</span>
+      </div>
+
+      <div class="tab-actions">
+        <button class="btn-ghost ag-btn" onclick="refreshData()" title="รีเฟรชข้อมูลทันที">
+          <svg id="refresh-icon" style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Breadcrumb Path -->
+    <div id="breadcrumb">
+      <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      <span id="bc-path">.agenthub / TEAM_CHAT.md</span>
+    </div>
+
+    <!-- Content + Right Panel -->
+    <div id="content-container">
+
+      <div id="content-area">
+
+        <!-- ═══ VIEW: CHAT ═══ -->
+        <div id="view-chat">
+          <div id="chat-feed"></div>
+
+          <!-- Floating Smart Auto-Scroll Jump Pill -->
+          <div id="new-messages-pill" class="hidden" onclick="jumpToBottom()">
+            <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
+            <span id="new-messages-text">ข้อความใหม่ ↓</span>
+          </div>
+        </div>
+
+        <!-- ═══ VIEW: DISPATCH ═══ -->
+        <div id="view-dispatch" class="hidden">
+          <div style="max-width:960px;margin:0 auto;">
+
+            <div class="panel-heading">
+              <span>กระจายงานสู่ Swarm Agents</span>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <span style="font-size:11px;color:var(--text-muted);font-weight:400;text-transform:none;">เทมเพลต:</span>
+                <button class="preset-btn" onclick="applyPreset('fullstack')">Full-Stack Web</button>
+                <button class="preset-btn" onclick="applyPreset('ai')">Data & AI</button>
+                <button class="preset-btn" onclick="applyPreset('refactor')">Refactor & Test</button>
+              </div>
+            </div>
+
+            <!-- Granular Target Worker Selector -->
+            <div style="margin-bottom:12px;">
+              <div class="label">เป้าหมายการส่งมอบงาน (Dispatch Target)</div>
+              <div class="target-chips-group">
+                <div class="target-chip active" data-target="all" onclick="selectDispatchTarget('all')">
+                  <span>🌐 กระจายงานทั้งหมด (All Workers)</span>
+                </div>
+                <div class="target-chip" data-target="worker1" onclick="selectDispatchTarget('worker1')">
+                  <span>🛠️ Worker 1 (Backend & Core)</span>
+                </div>
+                <div class="target-chip" data-target="worker2" onclick="selectDispatchTarget('worker2')">
+                  <span>🎨 Worker 2 (Frontend & UI)</span>
+                </div>
+                <div class="target-chip" data-target="worker3" onclick="selectDispatchTarget('worker3')">
+                  <span>🧪 Worker 3 (Testing & Docs)</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Mission Title + Overview -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+              <div>
+                <div class="label">ชื่อโปรเจกต์ / ภารกิจหลัก</div>
+                <input type="text" id="task-title" class="ag-input" placeholder="เช่น ระบบ Authentication & User Dashboard"/>
+              </div>
+              <div>
+                <div class="label">ข้อตกลงกลาง (Data Contract / Tech Stack)</div>
+                <input type="text" id="task-overview" class="ag-input" placeholder="เช่น FastAPI + SQLite + React, API prefix /api/v1/"/>
+              </div>
+            </div>
+
+            <!-- 3 Worker Task Columns -->
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px;">
+
+              <!-- Worker 1 Column -->
+              <div class="task-col" id="col-task-worker1" style="border-top:2px solid var(--accent-blue);">
+                <div class="task-col-header">
+                  <div class="task-col-dot" style="background:var(--accent-blue);"></div>
+                  <span>Worker 1 — Module A</span>
+                  <span style="margin-left:auto;font-size:10px;color:var(--text-muted);font-weight:400;text-transform:none;">เมลที่ 2</span>
+                </div>
+                <div style="padding:10px;">
+                  <textarea id="task-worker1" class="ag-textarea" placeholder="งานของ Worker 1 เช่น ออกแบบ DB Schema, เขียน REST API..."></textarea>
+                </div>
+              </div>
+
+              <!-- Worker 2 Column -->
+              <div class="task-col" id="col-task-worker2" style="border-top:2px solid var(--accent-green);">
+                <div class="task-col-header">
+                  <div class="task-col-dot" style="background:var(--accent-green);"></div>
+                  <span>Worker 2 — Module B</span>
+                  <span style="margin-left:auto;font-size:10px;color:var(--text-muted);font-weight:400;text-transform:none;">เมลที่ 3</span>
+                </div>
+                <div style="padding:10px;">
+                  <textarea id="task-worker2" class="ag-textarea" placeholder="งานของ Worker 2 เช่น สร้าง UI Components, Responsive Design..."></textarea>
+                </div>
+              </div>
+
+              <!-- Worker 3 Column -->
+              <div class="task-col" id="col-task-worker3" style="border-top:2px solid var(--purple);">
+                <div class="task-col-header">
+                  <div class="task-col-dot" style="background:var(--purple);"></div>
+                  <span>Worker 3 — Module C</span>
+                  <span style="margin-left:auto;font-size:10px;color:var(--text-muted);font-weight:400;text-transform:none;">เมลที่ 4</span>
+                </div>
+                <div style="padding:10px;">
+                  <textarea id="task-worker3" class="ag-textarea" placeholder="งานของ Worker 3 เช่น Automated Testing, Security Audit, Docs..."></textarea>
+                </div>
+              </div>
+
+            </div>
+
+            <div style="display:flex;justify-content:flex-end;gap:8px;">
+              <button class="ag-btn btn-secondary" onclick="clearForm()">ล้างฟอร์ม</button>
+              <button class="ag-btn btn-primary" id="btn-dispatch" onclick="submitDispatch()">
+                <svg style="width:14px;height:14px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                <span id="btn-dispatch-label">กระจายงานทันที (Dispatch All)</span>
+              </button>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- ═══ VIEW: ACCOUNTS ═══ -->
+        <div id="view-accounts" class="hidden">
+          <div style="max-width:960px;margin:0 auto;">
+
+            <div class="panel-heading">
+              <span>จัดการ 4 บัญชี & กระบวนการทำงาน (Process Liveness)</span>
+              <button class="ag-btn btn-primary" id="btn-launch-all-accounts" onclick="launchInstance('all')">
+                <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor"/></svg>
+                <span>เปิดพร้อมกัน 4 หน้าต่าง</span>
+              </button>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+
+              <!-- Lead Card -->
+              <div class="account-card" style="border-top:2px solid var(--amber);">
+                <div class="account-card-header">
+                  <div class="avatar lead">👑</div>
+                  <div>
+                    <div style="font-weight:600;font-size:13px;">Team Lead (เมลหลัก)</div>
+                    <div style="font-size:11px;color:var(--text-muted);">Orchestrator & Final QA</div>
+                  </div>
+                  <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
+                    <div class="status-dot-pulse stopped" id="status-dot-lead"></div>
+                    <span class="status-text stopped" id="status-label-lead">Stopped</span>
+                    <span class="pid-badge inactive" id="pid-badge-lead">Inactive</span>
+                  </div>
+                </div>
+                <div style="font-size:11px;color:var(--text-muted);font-family:'Cascadia Code','Consolas',monospace;">C:\...\antigravity\Antigravity.exe</div>
+                <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;">
+                  กระจายงาน, วาง Architecture, ตรวจสอบโค้ด และรันชุดทดสอบรอบสุดท้าย
+                </div>
+                <div style="display:flex;gap:8px;margin-top:auto;">
+                  <button class="ag-btn btn-secondary" id="btn-launch-lead" style="flex:1;justify-content:center;" onclick="launchInstance('lead')">
+                    <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor"/></svg>
+                    <span class="btn-label">เปิดแอป (Desktop)</span>
+                  </button>
+                  <button class="ag-btn btn-primary" id="btn-web-lead" style="flex:1;justify-content:center;" onclick="openAgentWeb('lead')">
+                    <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                    <span>เปิดหน้าจอ / Login</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Worker 1 Card -->
+              <div class="account-card" style="border-top:2px solid var(--accent-blue);">
+                <div class="account-card-header">
+                  <div class="avatar worker1">🛠️</div>
+                  <div>
+                    <div style="font-weight:600;font-size:13px;">Worker 1 (เมลที่ 2)</div>
+                    <div style="font-size:11px;color:var(--text-muted);">Module A / Backend & Core</div>
+                  </div>
+                  <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
+                    <div class="status-dot-pulse stopped" id="status-dot-worker1"></div>
+                    <span class="status-text stopped" id="status-label-worker1">Stopped</span>
+                    <span class="pid-badge inactive" id="pid-badge-worker1">Inactive</span>
+                  </div>
+                </div>
+                <div style="font-size:11px;color:var(--text-muted);font-family:'Cascadia Code','Consolas',monospace;">C:\...\antigravity-worker1\Worker1.exe</div>
+                <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;">
+                  Database, REST API, Core Business Logic — ดูแลโฟลเดอร์ <code>src/api/</code> <code>src/db/</code>
+                </div>
+                <div style="display:flex;gap:8px;margin-top:auto;">
+                  <button class="ag-btn btn-secondary" id="btn-launch-worker1" style="flex:1;justify-content:center;" onclick="launchInstance('worker1')">
+                    <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor"/></svg>
+                    <span class="btn-label">เปิดแอป (Desktop)</span>
+                  </button>
+                  <button class="ag-btn btn-primary" id="btn-web-worker1" style="flex:1;justify-content:center;" onclick="openAgentWeb('worker1')">
+                    <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                    <span>เปิดหน้าจอ / Login</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Worker 2 Card -->
+              <div class="account-card" style="border-top:2px solid var(--accent-green);">
+                <div class="account-card-header">
+                  <div class="avatar worker2">🎨</div>
+                  <div>
+                    <div style="font-weight:600;font-size:13px;">Worker 2 (เมลที่ 3)</div>
+                    <div style="font-size:11px;color:var(--text-muted);">Module B / Frontend & UI</div>
+                  </div>
+                  <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
+                    <div class="status-dot-pulse stopped" id="status-dot-worker2"></div>
+                    <span class="status-text stopped" id="status-label-worker2">Stopped</span>
+                    <span class="pid-badge inactive" id="pid-badge-worker2">Inactive</span>
+                  </div>
+                </div>
+                <div style="font-size:11px;color:var(--text-muted);font-family:'Cascadia Code','Consolas',monospace;">C:\...\antigravity-worker2\Worker2.exe</div>
+                <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;">
+                  UI Components, Theme, Responsive Design — ดูแลโฟลเดอร์ <code>src/components/</code> <code>public/</code>
+                </div>
+                <div style="display:flex;gap:8px;margin-top:auto;">
+                  <button class="ag-btn btn-secondary" id="btn-launch-worker2" style="flex:1;justify-content:center;" onclick="launchInstance('worker2')">
+                    <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor"/></svg>
+                    <span class="btn-label">เปิดแอป (Desktop)</span>
+                  </button>
+                  <button class="ag-btn btn-primary" id="btn-web-worker2" style="flex:1;justify-content:center;" onclick="openAgentWeb('worker2')">
+                    <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                    <span>เปิดหน้าจอ / Login</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Worker 3 Card -->
+              <div class="account-card" style="border-top:2px solid var(--purple);">
+                <div class="account-card-header">
+                  <div class="avatar worker3">🧪</div>
+                  <div>
+                    <div style="font-weight:600;font-size:13px;">Worker 3 (เมลที่ 4)</div>
+                    <div style="font-size:11px;color:var(--text-muted);">Module C / Testing & Docs</div>
+                  </div>
+                  <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
+                    <div class="status-dot-pulse stopped" id="status-dot-worker3"></div>
+                    <span class="status-text stopped" id="status-label-worker3">Stopped</span>
+                    <span class="pid-badge inactive" id="pid-badge-worker3">Inactive</span>
+                  </div>
+                </div>
+                <div style="font-size:11px;color:var(--text-muted);font-family:'Cascadia Code','Consolas',monospace;">C:\...\antigravity-worker3\Worker3.exe</div>
+                <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;">
+                  Unit Tests, Integration Tests, Security Audit — ดูแลโฟลเดอร์ <code>tests/</code> <code>docs/</code>
+                </div>
+                <div style="display:flex;gap:8px;margin-top:auto;">
+                  <button class="ag-btn btn-secondary" id="btn-launch-worker3" style="flex:1;justify-content:center;" onclick="launchInstance('worker3')">
+                    <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor"/></svg>
+                    <span class="btn-label">เปิดแอป (Desktop)</span>
+                  </button>
+                  <button class="ag-btn btn-primary" id="btn-web-worker3" style="flex:1;justify-content:center;" onclick="openAgentWeb('worker3')">
+                    <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                    <span>เปิดหน้าจอ / Login</span>
+                  </button>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- Token Tracking / Usage Monitor Dashboard -->
+            <div class="token-monitor-container" id="token-monitor-section">
+              <div class="panel-heading" style="margin-top:20px;margin-bottom:12px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <svg style="width:15px;height:15px;color:#d7ba7d;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                  </svg>
+                  <span>Token Tracking & Swarm Usage Monitor</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span style="font-size:11px;color:var(--text-muted);">Budget:</span>
+                  <select id="token-budget-select" class="token-select" onchange="changeTokenBudget(this.value)">
+                    <option value="50000">50,000 Tokens</option>
+                    <option value="100000" selected>100,000 Tokens</option>
+                    <option value="250000">250,000 Tokens</option>
+                    <option value="500000">500,000 Tokens</option>
+                    <option value="1000000">1,000,000 Tokens</option>
+                  </select>
+                  <button class="ag-btn btn-secondary" onclick="resetTokenMetrics()" style="padding:3px 8px;font-size:11px;" title="รีเซ็ตสถิติ Token">
+                    รีเซ็ต
+                  </button>
+                </div>
+              </div>
+
+              <!-- Budget Progress Gauge Card -->
+              <div class="token-overview-card">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                  <div>
+                    <span style="font-size:12px;color:var(--text-muted);">การใช้โทเค็นรวม (Total Swarm Consumption):</span>
+                    <span id="token-total-val" style="font-size:15px;font-weight:700;color:var(--text-primary);margin-left:8px;">0 Tokens</span>
+                    <span id="token-budget-max" style="font-size:12px;color:var(--text-muted);">/ 100,000</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:6px;">
+                    <span class="token-threshold-badge normal" id="token-threshold-badge">🟢 ปกติ (&lt; 70%)</span>
+                    <span id="token-percent-label" style="font-size:13px;font-weight:600;color:#4ec9b0;">0%</span>
+                  </div>
+                </div>
+
+                <!-- Progress Bar -->
+                <div class="token-bar-track">
+                  <div class="token-bar-fill normal" id="token-bar-fill" style="width:0%;"></div>
+                </div>
+
+                <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:var(--text-muted);">
+                  <span>0% (เริ่มรอบ)</span>
+                  <span>70% (ระดับเตือน Warning)</span>
+                  <span>90% (เกณฑ์แจ้งเตือน Critical)</span>
+                  <span>100% (จำกัดโควต้า)</span>
+                </div>
+              </div>
+
+              <!-- Per-Agent Breakdown Grid -->
+              <div class="token-agent-grid" style="margin-top:12px;display:grid;grid-template-columns:repeat(5, 1fr);gap:10px;">
+                <!-- Team Lead -->
+                <div class="token-agent-card" style="border-top:2px solid var(--amber);">
+                  <div class="token-agent-header">
+                    <span class="avatar lead" style="width:20px;height:20px;font-size:10px;">👑</span>
+                    <span style="font-size:11px;font-weight:600;">Team Lead</span>
+                  </div>
+                  <div class="token-agent-val" id="token-val-lead">0</div>
+                  <div class="token-agent-sub" id="token-pct-lead">0% (0 msg)</div>
+                  <div class="token-mini-track"><div class="token-mini-fill" id="token-fill-lead" style="width:0%;background:var(--amber);"></div></div>
+                </div>
+
+                <!-- Worker 1 -->
+                <div class="token-agent-card" style="border-top:2px solid var(--accent-blue);">
+                  <div class="token-agent-header">
+                    <span class="avatar worker1" style="width:20px;height:20px;font-size:10px;">🛠️</span>
+                    <span style="font-size:11px;font-weight:600;">Worker 1</span>
+                  </div>
+                  <div class="token-agent-val" id="token-val-worker1">0</div>
+                  <div class="token-agent-sub" id="token-pct-worker1">0% (0 msg)</div>
+                  <div class="token-mini-track"><div class="token-mini-fill" id="token-fill-worker1" style="width:0%;background:var(--accent-blue);"></div></div>
+                </div>
+
+                <!-- Worker 2 -->
+                <div class="token-agent-card" style="border-top:2px solid var(--accent-green);">
+                  <div class="token-agent-header">
+                    <span class="avatar worker2" style="width:20px;height:20px;font-size:10px;">🎨</span>
+                    <span style="font-size:11px;font-weight:600;">Worker 2</span>
+                  </div>
+                  <div class="token-agent-val" id="token-val-worker2">0</div>
+                  <div class="token-agent-sub" id="token-pct-worker2">0% (0 msg)</div>
+                  <div class="token-mini-track"><div class="token-mini-fill" id="token-fill-worker2" style="width:0%;background:var(--accent-green);"></div></div>
+                </div>
+
+                <!-- Worker 3 -->
+                <div class="token-agent-card" style="border-top:2px solid var(--purple);">
+                  <div class="token-agent-header">
+                    <span class="avatar worker3" style="width:20px;height:20px;font-size:10px;">🧪</span>
+                    <span style="font-size:11px;font-weight:600;">Worker 3</span>
+                  </div>
+                  <div class="token-agent-val" id="token-val-worker3">0</div>
+                  <div class="token-agent-sub" id="token-pct-worker3">0% (0 msg)</div>
+                  <div class="token-mini-track"><div class="token-mini-fill" id="token-fill-worker3" style="width:0%;background:var(--purple);"></div></div>
+                </div>
+
+                <!-- Supervisor -->
+                <div class="token-agent-card" style="border-top:2px solid #a5b4fc;">
+                  <div class="token-agent-header">
+                    <span class="avatar human" style="width:20px;height:20px;font-size:10px;">👤</span>
+                    <span style="font-size:11px;font-weight:600;">Supervisor</span>
+                  </div>
+                  <div class="token-agent-val" id="token-val-supervisor">0</div>
+                  <div class="token-agent-sub" id="token-pct-supervisor">0% (0 msg)</div>
+                  <div class="token-mini-track"><div class="token-mini-fill" id="token-fill-supervisor" style="width:0%;background:#a5b4fc;"></div></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Isolation Information Box -->
+            <div style="margin-top:16px;background:var(--bg-panel);border:1px solid #1a4a6e;border-left:3px solid var(--accent-blue);border-radius:3px;padding:12px 14px;font-size:12px;color:var(--text-secondary);line-height:1.7;">
+              <b style="color:var(--text-primary);">💡 วิธีล็อกอินครั้งแรก:</b> เมื่อคลิกเปิดหน้าต่างครั้งแรก Antigravity IDE จะแสดงหน้า Sign in with Google ให้ล็อกอินด้วยอีเมลของบัญชีนั้น ๆ Session จะถูกบันทึกถาวรในโฟลเดอร์ Profile แยกกันโดยสมบูรณ์ ไม่ทับซ้อนกัน
+            </div>
+
+          </div>
+        </div>
+
+        <!-- ═══ VIEW: BOARD ═══ -->
+        <div id="view-board" class="hidden">
+          <div style="max-width:960px;margin:0 auto;">
+            <div class="panel-heading">
+              <span>กระดานโปรเจกต์ (BOARD.md)</span>
+            </div>
+            <div id="board-content" style="background:var(--bg-panel);border:1px solid var(--border);border-radius:3px;padding:18px;line-height:1.7;">
+              <span style="color:var(--text-muted);">กำลังโหลดข้อมูลกระดานโปรเจกต์...</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Right Panel: Final Review Queue -->
+      <div id="right-panel">
+        <div class="right-panel-header">
+          <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          <span>Final Review (Lead)</span>
+        </div>
+        <div id="review-content"></div>
+        <div style="padding:10px 12px;border-top:1px solid var(--border);background:#1e1e1e;">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">พิมพ์คำสั่งนี้ในหน้าต่างเมลหลัก:</div>
+          <div style="background:var(--bg-input);border:1px solid var(--border);border-radius:3px;padding:8px;font-family:'Cascadia Code','Consolas',monospace;font-size:11px;color:#9cdcfe;cursor:pointer;line-height:1.5;" onclick="copyLeadCmd()" title="คลิกเพื่อคัดลอกคำสั่ง">
+            ตรวจสอบ .agenthub/inbox/lead_review.md และรัน test รวมงานชิ้นสุดท้าย
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Bottom Chat Input Bar -->
+    <div id="bottom-bar">
+      <div class="chat-input-row">
+        <textarea id="chat-input" rows="1" placeholder="ส่งข้อความเข้าห้องแชท Swarm Team... (Enter เพื่อส่ง, Shift+Enter ขึ้นบรรทัดใหม่)" onkeydown="handleChatKey(event)" oninput="autoResize(this)"></textarea>
+        <button class="ag-btn btn-primary" onclick="sendChat()" style="flex-shrink:0;padding:6px 12px;">
+          <svg style="width:14px;height:14px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:6px;padding:0 2px;">
+        <span style="font-size:11px;color:var(--text-muted);">จาก: <span style="color:#a5b4fc;font-weight:600;">Human Supervisor</span></span>
+        <span style="font-size:11px;color:var(--text-muted);">รีเฟรชข้อมูลอัตโนมัติทุก 3 วินาที</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ══ 4. BOTTOM STATUS BAR (22px) ══════════════════════════════════════════ -->
+  <div id="status-bar">
+    <div class="status-item">
+      <div class="status-dot-static"></div>
+      <span>Commander Online — Port 8989</span>
+    </div>
+    <div class="status-item" style="margin-left:6px;">
+      <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+      <span id="status-ws">กำลังโหลด workspace...</span>
+    </div>
+    <div class="status-item" style="margin-left:6px;">
+      <span id="status-process-summary">0/4 Agents Active</span>
+    </div>
+    <div class="status-item" id="status-tokens" onclick="switchView('accounts')" style="margin-left:6px;cursor:pointer;" title="คลิกเพื่อดูภาพรวมการใช้ Token ในระบบ">
+      <div class="status-dot-static" id="token-status-dot" style="background:#4ec9b0;"></div>
+      <span id="token-status-text">⚡ 0 / 100k Tokens (0%)</span>
+    </div>
+    <div style="margin-left:auto;display:flex;gap:14px;font-size:11px;opacity:0.9;">
+      <span>Antigravity Multi-Agent Commander v2.0</span>
+      <span id="status-time"></span>
+    </div>
+  </div>
+
+</div>
+
+<!-- Toast Container -->
+<div id="toast"></div>
+
+<script>
+  // ════════════════════════════════════════════════════════════════════════════
+  // CLIENT CONTROLLERS & DATA LOGIC (ZERO-CDN RESILIENT)
+  // ════════════════════════════════════════════════════════════════════════════
+
+  let currentView = 'chat';
+  let currentDispatchTarget = 'all'; // 'all' | 'worker1' | 'worker2' | 'worker3'
+  let lastChatRaw = '';
+  let lastBoardRaw = '';
+  let lastReviewRaw = '';
+  let isPolling = false;
+
+  // Auto-Scroll State
+  let isAutoScrollLocked = true;
+  let unreadCount = 0;
+  let lastRenderedCount = 0;
+
+  // Presets definition
+  const presets = {
+    fullstack: {
+      title: 'ระบบ Authentication & User Dashboard',
+      overview: 'Stack: Python FastAPI, SQLite, React, Pytest — API prefix /api/v1/',
+      w1: '1. ออกแบบ SQLite schema: users, sessions\n2. เขียน REST API: POST /auth/register, /auth/login, GET /user/profile\n3. JWT validation middleware\n4. โพสต์ API schema ลง TEAM_CHAT.md',
+      w2: '1. สร้างหน้า Login Form + Register Form\n2. Dashboard UI แสดง User Profile\n3. เชื่อมต่อ Axios กับ API ของ Worker 1\n4. จัดการ Error state สวยงาม',
+      w3: '1. Unit Test ทุก Endpoint (Success + Fail cases)\n2. Integration Test Login flow ครบ cycle\n3. Security: ตรวจสอบ SQL Injection, XSS\n4. เขียน README.md + API docs'
+    },
+    ai: {
+      title: 'Data Pipeline & AI Model Service',
+      overview: 'Stack: Python Pandas, FastAPI, Scikit-Learn/Ollama — Input: CSV/JSON',
+      w1: '1. โมดูล Data Cleaning & Preprocessing\n2. Feature Engineering + save clean_data.parquet\n3. ประกาศ Schema และ Column types ลง TEAM_CHAT.md',
+      w2: '1. พัฒนาโมเดล ML / LLM Inference Service\n2. โหลดข้อมูลจาก Worker 1 ประมวลผล\n3. Expose /api/predict endpoint',
+      w3: '1. Benchmark: วัด Accuracy, F1, Latency\n2. Data Validation Test: ป้องกัน dirty data\n3. เขียน Model Card + Evaluation Report'
+    },
+    refactor: {
+      title: 'Code Refactor, Bug Fix & 90%+ Test Coverage',
+      overview: 'เป้าหมาย: Clean Architecture, Performance, Security',
+      w1: '1. Refactor Database Query ให้มี Index + Connection Pool\n2. แก้ไข Memory Leak ที่พบ\n3. Optimize API Response time ให้ < 200ms',
+      w2: '1. Responsive UI: Mobile + Tablet + Desktop\n2. Accessibility (a11y) ตาม WCAG 2.1\n3. ลด Re-render ที่ไม่จำเป็น',
+      w3: '1. วิเคราะห์ Test Coverage หาจุดที่ขาด\n2. Security Audit: OWASP Top 10\n3. Regression Test สำหรับ Bug ที่แก้ไขแล้ว'
+    }
+  };
+
+  // ── Utils ──────────────────────────────────────────────────────────────────
+  function showToast(msg, color = '#007acc') {
+    const t = document.getElementById('toast');
+    if (!t) return;
+    t.textContent = msg;
+    t.style.borderLeftColor = color;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 3200);
+  }
+
+  function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+  }
+
+  function updateClock() {
+    const el = document.getElementById('status-time');
+    if (!el) return;
+    const now = new Date();
+    el.textContent = now.toLocaleTimeString('th-TH', { hour12: false });
+  }
+  updateClock();
+  setInterval(updateClock, 1000);
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  // ── Syntax Token Styler ───────────────────────────────────────────────────
+  function highlightCode(code, lang = '') {
+    if (!code) return '';
+    const l = (lang || '').toLowerCase().trim();
+    const pyKeywords = new Set(['def', 'class', 'return', 'import', 'from', 'as', 'if', 'elif', 'else', 'for', 'while', 'in', 'try', 'except', 'finally', 'with', 'async', 'await', 'pass', 'break', 'continue', 'lambda', 'yield']);
+    const jsKeywords = new Set(['function', 'const', 'let', 'var', 'return', 'if', 'else', 'for', 'while', 'try', 'catch', 'finally', 'async', 'await', 'class', 'export', 'import', 'new', 'typeof']);
+    const keywords = (l === 'js' || l === 'javascript') ? jsKeywords : pyKeywords;
+
+    const tokenRegex = /(["'])(?:(?=(\\?))\2.)*?\1|(#|\/\/).*?$|\b[a-zA-Z_]\w*\b|\b\d+(?:\.\d+)?\b|[^\w\s"']+/gm;
+
+    let lastIndex = 0;
+    let match;
+    let result = '';
+
+    while ((match = tokenRegex.exec(code)) !== null) {
+      if (match.index > lastIndex) {
+        result += escapeHtml(code.slice(lastIndex, match.index));
+      }
+      lastIndex = tokenRegex.lastIndex;
+
+      const tok = match[0];
+      if (tok.startsWith('"') || tok.startsWith("'")) {
+        result += `<span class="tok-string">${escapeHtml(tok)}</span>`;
+      } else if (tok.startsWith('#') || tok.startsWith('//')) {
+        result += `<span class="tok-comment">${escapeHtml(tok)}</span>`;
+      } else if (keywords.has(tok)) {
+        result += `<span class="tok-keyword">${escapeHtml(tok)}</span>`;
+      } else if (/^(True|False|None|true|false|null|undefined)$/.test(tok)) {
+        result += `<span class="tok-constant">${escapeHtml(tok)}</span>`;
+      } else if (/^\d+(?:\.\d+)?$/.test(tok)) {
+        result += `<span class="tok-number">${escapeHtml(tok)}</span>`;
+      } else {
+        result += escapeHtml(tok);
+      }
+    }
+
+    if (lastIndex < code.length) {
+      result += escapeHtml(code.slice(lastIndex));
+    }
+
+    return result;
+  }
+
+  // ── Zero-Dependency Markdown Renderer ─────────────────────────────────────
+  function renderMarkdown(rawText) {
+    if (!rawText) return '';
+    const textWithNl = rawText.endsWith('\n') ? rawText : rawText + '\n';
+
+    const codeBlocks = [];
+    const tableBlocks = [];
+
+    // Pass 1: Extract Fenced Code Blocks (```lang ... ```)
+    let text = textWithNl.replace(/```([a-zA-Z0-9_-]*)\r?\n([\s\S]*?)```/g, (match, lang, code) => {
+      const idx = codeBlocks.length;
+      const cleanLang = lang ? lang.trim() : 'code';
+      const highlighted = highlightCode(code, cleanLang);
+      const html = `
+        <div class="code-block">
+          <div class="code-header">
+            <span>${cleanLang}</span>
+            <button class="code-copy-btn" onclick="copySnippet(this)">
+              <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+              <span class="copy-label">Copy</span>
+            </button>
+          </div>
+          <pre><code class="language-${cleanLang}">${highlighted}</code></pre>
+        </div>`;
+      codeBlocks.push(html);
+      return `\n%%CODE_BLOCK_${idx}%%\n`;
+    });
+
+    // Pass 2: Extract Markdown Tables (| col | col |)
+    text = text.replace(/((?:^[ \t]*\|.+?\|[ \t]*\r?\n)+)/gm, (tableMatch) => {
+      const lines = tableMatch.trim().split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      if (lines.length < 2) return tableMatch;
+
+      const sepIndex = lines.findIndex(l => /^\|([ \t]*:?-+:?[ \t]*\|)+$/.test(l));
+      if (sepIndex === -1) return tableMatch;
+
+      const headerLines = lines.slice(0, sepIndex);
+      const dataLines = lines.slice(sepIndex + 1);
+
+      const parseCells = row => row.replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+
+      let thead = '';
+      headerLines.forEach(h => {
+        const cells = parseCells(h);
+        thead += `<tr>${cells.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr>`;
+      });
+
+      let tbody = '';
+      dataLines.forEach(r => {
+        const cells = parseCells(r);
+        tbody += `<tr>${cells.map(c => {
+          let content = escapeHtml(c);
+          content = content.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+          content = content.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+          return `<td>${content}</td>`;
+        }).join('')}</tr>`;
+      });
+
+      const idx = tableBlocks.length;
+      const tableHtml = `
+        <div class="table-container">
+          <table class="ag-table">
+            ${thead ? `<thead>${thead}</thead>` : ''}
+            <tbody>${tbody}</tbody>
+          </table>
+        </div>`;
+      tableBlocks.push(tableHtml);
+      return `\n%%TABLE_BLOCK_${idx}%%\n`;
+    });
+
+    // Pass 3: Process Line-by-Line Markdown Elements
+    const lines = text.split(/\r?\n/);
+    const processedLines = lines.map(line => {
+      if (/^%%(CODE|TABLE)_BLOCK_\d+%%$/.test(line.trim())) {
+        return line.trim();
+      }
+
+      let l = escapeHtml(line);
+
+      // Headers
+      if (/^### (.*)$/.test(l)) return l.replace(/^### (.*)$/, '<h4 class="ag-h4">$1</h4>');
+      if (/^## (.*)$/.test(l)) return l.replace(/^## (.*)$/, '<h3 class="ag-h3">$1</h3>');
+      if (/^# (.*)$/.test(l)) return l.replace(/^# (.*)$/, '<h2 class="ag-h2">$1</h2>');
+
+      // Horizontal Rule
+      if (/^---{1,}$/.test(l.trim())) return '<hr class="ag-hr" />';
+
+      // Blockquotes
+      if (/^&gt;\s?(.*)$/.test(l)) {
+        return l.replace(/^&gt;\s?(.*)$/, '<blockquote class="ag-quote">$1</blockquote>');
+      }
+
+      // Unordered Lists
+      if (/^[*-]\s+(.*)$/.test(l)) {
+        return l.replace(/^[*-]\s+(.*)$/, '<li class="ag-li">$1</li>');
+      }
+
+      // Inlines
+      l = l.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      l = l.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+      l = l.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+      l = l.replace(/(https?:\/\/[^\s&<]+)/g, '<a href="$1" target="_blank" rel="noopener" class="ag-link">$1</a>');
+
+      return l;
+    });
+
+    let output = processedLines.join('\n');
+
+    // Wrap consecutive list items in <ul>
+    output = output.replace(/((?:<li class="ag-li">.*?<\/li>\s*)+)/g, '<ul class="ag-ul">$1</ul>');
+
+    // Wrap paragraphs
+    output = output.split('\n\n').map(chunk => {
+      if (chunk.startsWith('%%') || chunk.startsWith('<h') || chunk.startsWith('<blockquote') || chunk.startsWith('<ul') || chunk.startsWith('<hr')) {
+        return chunk;
+      }
+      return `<p>${chunk.replace(/\n/g, '<br>')}</p>`;
+    }).join('\n');
+
+    // Pass 4: Restore Code and Table Placeholders
+    tableBlocks.forEach((html, i) => {
+      output = output.replace(new RegExp(`%%TABLE_BLOCK_${i}%%`, 'g'), () => html);
+    });
+    codeBlocks.forEach((html, i) => {
+      output = output.replace(new RegExp(`%%CODE_BLOCK_${i}%%`, 'g'), () => html);
+    });
+
+    return output;
+  }
+
+  // Copy code helper with clipboard fallback
+  function copySnippet(btn) {
+    const codeBlock = btn.closest('.code-block');
+    const codeEl = codeBlock ? codeBlock.querySelector('code') : null;
+    if (!codeEl) return;
+
+    const textToCopy = codeEl.innerText;
+    const label = btn.querySelector('.copy-label') || btn;
+    const orig = label.textContent;
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(textToCopy).then(() => {
+        label.textContent = 'Copied! ✓';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          label.textContent = orig;
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = textToCopy;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      label.textContent = 'Copied! ✓';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        label.textContent = orig;
+        btn.classList.remove('copied');
+      }, 2000);
+    }
+  }
+
+  // ── Two-Pass Swarm Chat Parser ─────────────────────────────────────────────
+  const SENDER_ROLES = {
+    'Team Lead':             { role: 'LEAD',        cls: 'lead',       badge: 'badge-lead',       emoji: '👑' },
+    'Worker 1':              { role: 'WORKER 1',    cls: 'worker1',    badge: 'badge-w1',         emoji: '🛠️' },
+    'Worker 2':              { role: 'WORKER 2',    cls: 'worker2',    badge: 'badge-w2',         emoji: '🎨' },
+    'Worker 3':              { role: 'WORKER 3',    cls: 'worker3',    badge: 'badge-w3',         emoji: '🧪' },
+    'Central Dispatcher':    { role: 'DISPATCHER',  cls: 'dispatcher', badge: 'badge-dispatcher', emoji: '📢' },
+    '📢 Central Dispatcher': { role: 'DISPATCHER',  cls: 'dispatcher', badge: 'badge-dispatcher', emoji: '📢' },
+    'Human Supervisor':      { role: 'SUPERVISOR',  cls: 'human',      badge: 'badge-human',      emoji: '👤' },
+    'You':                   { role: 'YOU',         cls: 'human',      badge: 'badge-human',      emoji: '👤' },
+    'System':                { role: 'SYSTEM',      cls: 'system',     badge: 'badge-sys',        emoji: '⚙️' }
+  };
+
+  function resolveSenderMeta(rawSender) {
+    const clean = rawSender.replace(/[`\[\]]/g, '').trim();
+    for (const [key, meta] of Object.entries(SENDER_ROLES)) {
+      if (clean.includes(key) || key.includes(clean)) {
+        return { ...meta, displayName: clean };
+      }
+    }
+    return { role: 'AGENT', cls: 'system', badge: 'badge-sys', emoji: '🤖', displayName: clean };
+  }
+
+  function parseChatLog(rawContent) {
+    if (!rawContent || !rawContent.trim()) return [];
+
+    const DELIMITER_REGEX = /^\s*-\s*`?\[(\d{4}-\d{2}-\d{2}\s[\d:]+)\]\s*\[([^\]]+)\]`?[:\s]*(.*)$/;
+    const lines = rawContent.split(/\r?\n/);
+    const messages = [];
+    let currentMsg = null;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const match = line.match(DELIMITER_REGEX);
+
+      if (match) {
+        if (currentMsg) {
+          messages.push(finalizeMessage(currentMsg));
+        }
+        currentMsg = {
+          time: match[1],
+          sender: match[2].trim(),
+          bodyLines: match[3].trim() ? [match[3]] : []
+        };
+      } else if (currentMsg) {
+        currentMsg.bodyLines.push(line);
+      }
+    }
+
+    if (currentMsg) {
+      messages.push(finalizeMessage(currentMsg));
+    }
+
+    return messages;
+  }
+
+  function finalizeMessage(msg) {
+    const rawBody = msg.bodyLines.join('\n').trim();
+    const meta = resolveSenderMeta(msg.sender);
+    const renderedHtml = renderMarkdown(rawBody);
+
+    return {
+      time: msg.time,
+      sender: meta.displayName,
+      meta: meta,
+      renderedHtml: renderedHtml,
+      rawText: rawBody
+    };
+  }
+
+  function renderChatFeed(messages) {
+    const feed = document.getElementById('chat-feed');
+    if (!feed) return;
+
+    if (messages.length === 0) {
+      feed.innerHTML = `
+        <div style="padding:48px 20px;text-align:center;color:var(--text-muted);">
+          <div style="font-size:24px;margin-bottom:8px;">💬</div>
+          <div style="font-size:14px;font-weight:600;color:var(--text-secondary);margin-bottom:4px;">ยังไม่มีการสนทนาในห้องแชท Swarm</div>
+          <div style="font-size:12px;">ส่งคำสั่งหรือข้อความในช่องด้านล่างเพื่อสื่อสารกับ Team Lead และ Workers</div>
+        </div>`;
+      return;
+    }
+
+    let html = '';
+    messages.forEach(msg => {
+      html += `
+        <div class="chat-message" data-sender="${escapeHtml(msg.sender)}">
+          <div class="avatar ${msg.meta.cls}">${msg.meta.emoji}</div>
+          <div class="chat-body">
+            <div class="chat-sender">
+              <span class="sender-name">${escapeHtml(msg.sender)}</span>
+              <span class="badge ${msg.meta.badge}">${msg.meta.role}</span>
+              <span class="chat-time">${msg.time}</span>
+            </div>
+            <div class="chat-text">${msg.renderedHtml}</div>
+          </div>
+        </div>`;
+    });
+
+    feed.innerHTML = html;
+  }
+
+  // ── Smart Auto-Scroll Controller ──────────────────────────────────────────
+  function setupAutoScroll() {
+    const viewChat = document.getElementById('view-chat');
+    if (!viewChat) return;
+
+    viewChat.addEventListener('scroll', () => {
+      const scrollBottom = viewChat.scrollHeight - viewChat.scrollTop - viewChat.clientHeight;
+      if (scrollBottom <= 35) {
+        isAutoScrollLocked = true;
+        unreadCount = 0;
+        hideNewMessagesPill();
+      } else {
+        isAutoScrollLocked = false;
+      }
+    }, { passive: true });
+  }
+
+  function handleAutoScrollOnNewMessages(totalCount) {
+    const viewChat = document.getElementById('view-chat');
+    if (!viewChat) return;
+
+    const newArrivals = totalCount - lastRenderedCount;
+
+    if (isAutoScrollLocked) {
+      viewChat.scrollTop = viewChat.scrollHeight;
+      unreadCount = 0;
+      hideNewMessagesPill();
+    } else {
+      if (newArrivals > 0 && lastRenderedCount > 0) {
+        unreadCount += newArrivals;
+        showNewMessagesPill(unreadCount);
+      }
+    }
+
+    lastRenderedCount = totalCount;
+  }
+
+  function jumpToBottom() {
+    const viewChat = document.getElementById('view-chat');
+    if (!viewChat) return;
+    viewChat.scrollTo({ top: viewChat.scrollHeight, behavior: 'smooth' });
+    isAutoScrollLocked = true;
+    unreadCount = 0;
+    hideNewMessagesPill();
+  }
+
+  function showNewMessagesPill(count) {
+    const pill = document.getElementById('new-messages-pill');
+    const text = document.getElementById('new-messages-text');
+    if (!pill || !text) return;
+    text.textContent = count > 1 ? `ข้อความใหม่ (${count}) ↓` : `ข้อความใหม่ ↓`;
+    pill.classList.remove('hidden');
+  }
+
+  function hideNewMessagesPill() {
+    const pill = document.getElementById('new-messages-pill');
+    if (pill) pill.classList.add('hidden');
+  }
+
+  // ── Process Liveness & Launch Controller ──────────────────────────────────
+  function updateProcessIndicators(processStatus = {}) {
+    const agentIds = ['lead', 'worker1', 'worker2', 'worker3'];
+    let runningCount = 0;
+
+    agentIds.forEach(id => {
+      const proc = processStatus[id] || { running: false, pid: null };
+      const isRunning = proc.running === true;
+      if (isRunning) runningCount++;
+
+      // 1. Account Cards in view-accounts
+      const dotEl = document.getElementById(`status-dot-${id}`);
+      const labelEl = document.getElementById(`status-label-${id}`);
+      const pidEl = document.getElementById(`pid-badge-${id}`);
+      const btnEl = document.getElementById(`btn-launch-${id}`);
+
+      if (dotEl) {
+        dotEl.className = `status-dot-pulse ${isRunning ? 'running' : 'stopped'}`;
+        dotEl.title = isRunning ? `Running (PID: ${proc.pid})` : 'Stopped';
+      }
+      if (labelEl) {
+        labelEl.textContent = isRunning ? 'Running' : 'Stopped';
+        labelEl.className = `status-text ${isRunning ? 'running' : 'stopped'}`;
+      }
+      if (pidEl) {
+        pidEl.textContent = isRunning ? `PID: ${proc.pid}` : 'Inactive';
+        pidEl.className = `pid-badge ${isRunning ? 'active' : 'inactive'}`;
+      }
+      if (btnEl) {
+        const btnLabel = btnEl.querySelector('.btn-label') || btnEl;
+        btnLabel.textContent = isRunning 
+          ? `เปิดหน้าต่าง / Focus (PID: ${proc.pid})` 
+          : `เปิดหน้าต่าง / Sign in Google (${id === 'lead' ? 'Lead' : id.toUpperCase()})`;
+      }
+
+      // 2. Sidebar Profile Dots and Badges
+      const sbDot = document.getElementById(`sb-dot-${id}`);
+      const sbPid = document.getElementById(`sb-pid-${id}`);
+      if (sbDot) {
+        sbDot.className = `sidebar-dot ${isRunning ? 'running' : 'stopped'}`;
+        sbDot.title = isRunning ? `Running (PID: ${proc.pid})` : 'Stopped';
+      }
+      if (sbPid) {
+        sbPid.textContent = isRunning ? `PID ${proc.pid}` : 'Off';
+        sbPid.className = `sidebar-pid ${isRunning ? 'running' : 'stopped'}`;
+      }
+    });
+
+    // 3. Status Bar Summary
+    const statusSummary = document.getElementById('status-process-summary');
+    if (statusSummary) {
+      statusSummary.textContent = `${runningCount}/4 Agents Active`;
+    }
+  }
+
+  async function launchInstance(target) {
+    const isAll = target === 'all';
+    const btn = isAll 
+      ? document.getElementById('btn-launch-all-accounts')
+      : document.getElementById(`btn-launch-${target}`);
+
+    const labelSpan = btn ? btn.querySelector('.btn-label') || btn : null;
+    const originalText = labelSpan ? labelSpan.textContent : '';
+
+    if (btn) {
+      btn.disabled = true;
+      if (labelSpan) labelSpan.textContent = 'กำลังเปิดหน้าต่าง (Launching...)...';
+    }
+
+    showToast(isAll ? 'กำลังเปิดหน้าต่าง Antigravity ทั้ง 4 บัญชี...' : `กำลังเปิดหน้าต่าง ${target}...`, '#007acc');
+
+    try {
+      const res = await api('/api/launch', 'POST', { target });
+      if (res && res.success) {
+        const launchedList = (res.launched || []).join(', ');
+        showToast(`เปิดหน้าต่างสำเร็จ: ${launchedList} ✓`, '#4ec9b0');
+      } else if (res && res.failed && res.failed.length > 0) {
+        const errs = res.errors ? Object.values(res.errors).join(', ') : 'Launch failed';
+        showToast(`เปิดหน้าต่างล้มเหลว: ${errs}`, '#f48771');
+      }
+    } catch (e) {
+      showToast(`Error launching agent: ${e.message}`, '#f48771');
+    } finally {
+      await refreshData();
+      if (btn) {
+        btn.disabled = false;
+        if (labelSpan) labelSpan.textContent = originalText;
+      }
+    }
+  }
+
+  // ── Granular Task Dispatch Controller ─────────────────────────────────────
+  function selectDispatchTarget(target) {
+    currentDispatchTarget = target;
+
+    document.querySelectorAll('.target-chip').forEach(chip => {
+      const match = chip.getAttribute('data-target') === target;
+      chip.classList.toggle('active', match);
+    });
+
+    const isAll = target === 'all';
+    ['worker1', 'worker2', 'worker3'].forEach(w => {
+      const col = document.getElementById(`col-task-${w}`);
+      const textarea = document.getElementById(`task-${w}`);
+      const isSelected = isAll || target === w;
+
+      if (col) {
+        col.classList.toggle('dimmed', !isSelected);
+        col.classList.toggle('focused-worker', target === w);
+      }
+      if (textarea) {
+        textarea.placeholder = isSelected 
+          ? `งานของ ${w.toUpperCase()}...`
+          : `(งานเดิมจะถูกรักษาไว้ ไม่ถูกเขียนทับ)`;
+      }
+    });
+
+    const submitLabel = document.getElementById('btn-dispatch-label');
+    if (submitLabel) {
+      submitLabel.textContent = isAll 
+        ? 'กระจายงานทันที (Dispatch All)' 
+        : `มอบหมายงานเฉพาะ ${target.toUpperCase()}`;
+    }
+  }
+
+  async function submitDispatch() {
+    const title = document.getElementById('task-title').value.trim();
+    if (!title) {
+      showToast('กรุณาระบุชื่อโปรเจกต์ / ภารกิจ', '#f48771');
+      document.getElementById('task-title').focus();
+      return;
+    }
+
+    const overview = document.getElementById('task-overview').value.trim();
+    const payload = {
+      title,
+      overview,
+      target_worker: currentDispatchTarget
+    };
+
+    if (currentDispatchTarget === 'all') {
+      payload.worker1 = document.getElementById('task-worker1').value.trim();
+      payload.worker2 = document.getElementById('task-worker2').value.trim();
+      payload.worker3 = document.getElementById('task-worker3').value.trim();
+    } else {
+      payload[currentDispatchTarget] = document.getElementById(`task-${currentDispatchTarget}`).value.trim();
+    }
+
+    const btn = document.getElementById('btn-dispatch');
+    btn.disabled = true;
+    const originalText = btn.innerHTML;
+    btn.innerHTML = `<svg class="animate-spin" style="width:14px;height:14px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> กำลังกระจายงาน...`;
+
+    try {
+      const res = await api('/api/dispatch', 'POST', payload);
+      if (res && res.success) {
+        showToast(res.message || 'กระจายงานสำเร็จเรียบร้อย ✓', '#4ec9b0');
+        switchView('chat');
+        await refreshData();
+      } else {
+        showToast(res.error || 'เกิดข้อผิดพลาดในการกระจายงาน', '#f48771');
+      }
+    } catch (err) {
+      showToast(`Network error: ${err.message}`, '#f48771');
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = originalText;
+    }
+  }
+
+  function applyPreset(type) {
+    const p = presets[type];
+    if (!p) return;
+    document.getElementById('task-title').value = p.title;
+    document.getElementById('task-overview').value = p.overview;
+    document.getElementById('task-worker1').value = p.w1;
+    document.getElementById('task-worker2').value = p.w2;
+    document.getElementById('task-worker3').value = p.w3;
+    selectDispatchTarget('all');
+    showToast(`โหลดเทมเพลตภารกิจ "${type}" สำเร็จ ✓`);
+    if (currentView !== 'dispatch') {
+      switchView('dispatch');
+    }
+  }
+
+  function clearForm() {
+    ['task-title', 'task-overview', 'task-worker1', 'task-worker2', 'task-worker3']
+      .forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+      });
+    selectDispatchTarget('all');
+  }
+
+  // ── View Switcher ──────────────────────────────────────────────────────────
+  const VIEWS = ['chat', 'dispatch', 'accounts', 'board'];
+
+  function switchView(v) {
+    currentView = v;
+
+    VIEWS.forEach(name => {
+      const el = document.getElementById('view-' + name);
+      if (el) el.classList.add('hidden');
+      const tab = document.getElementById('tab-' + name);
+      if (tab) tab.classList.remove('active');
+      const act = document.getElementById('act-' + name);
+      if (act) act.classList.remove('active');
+      const sbNav = document.getElementById('sb-nav-' + name);
+      if (sbNav) sbNav.classList.remove('active');
+    });
+
+    const activeView = document.getElementById('view-' + v);
+    if (activeView) activeView.classList.remove('hidden');
+
+    const activeTab = document.getElementById('tab-' + v);
+    if (activeTab) activeTab.classList.add('active');
+
+    const activeAct = document.getElementById('act-' + v);
+    if (activeAct) activeAct.classList.add('active');
+
+    const activeSbNav = document.getElementById('sb-nav-' + v);
+    if (activeSbNav) activeSbNav.classList.add('active');
+
+    // Breadcrumbs Map
+    const bcMap = {
+      chat: '.agenthub / TEAM_CHAT.md',
+      dispatch: '.agenthub / Dispatch Tasks',
+      accounts: '.agenthub / Accounts & Login',
+      board: '.agenthub / BOARD.md'
+    };
+    const bcPath = document.getElementById('bc-path');
+    if (bcPath) bcPath.textContent = bcMap[v] || ('.agenthub / ' + v);
+
+    // Chat bottom bar display
+    const bottomBar = document.getElementById('bottom-bar');
+    if (bottomBar) bottomBar.style.display = (v === 'chat') ? '' : 'none';
+
+    // Board refresh when switching to board view
+    if (v === 'board' && lastBoardRaw) {
+      const boardContent = document.getElementById('board-content');
+      if (boardContent) boardContent.innerHTML = renderMarkdown(lastBoardRaw);
+    }
+  }
+
+  // Accordion Toggle
+  function toggleAccordion(header) {
+    header.classList.toggle('collapsed');
+    const content = header.nextElementSibling;
+    if (content) content.classList.toggle('collapsed');
+  }
+
+  // ── Chat Input & Lead Review Actions ───────────────────────────────────────
+  async function sendChat() {
+    const input = document.getElementById('chat-input');
+    const msg = input.value.trim();
+    if (!msg) return;
+    input.value = '';
+    autoResize(input);
+
+    try {
+      await api('/api/chat', 'POST', { sender: 'Human Supervisor', message: msg });
+      await refreshData();
+      jumpToBottom();
+    } catch (e) {
+      showToast('ไม่สามารถส่งข้อความได้: ' + e.message, '#f48771');
+    }
+  }
+
+  function handleChatKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendChat();
+    }
+  }
+
+  function copyLeadCmd() {
+    const txt = 'ตรวจสอบ .agenthub/inbox/lead_review.md และรัน test รวมงานชิ้นสุดท้าย';
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(() => showToast('คัดลอกคำสั่งสำหรับ Lead แล้ว ✓', '#4ec9b0'));
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = txt;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      showToast('คัดลอกคำสั่งสำหรับ Lead แล้ว ✓', '#4ec9b0');
+    }
+  }
+
+  async function changeWorkspace() {
+    const current = document.getElementById('ws-label').title || '';
+    const pywebview = window.pywebview;
+    let newWs;
+    if (pywebview && pywebview.api && pywebview.api.pick_folder) {
+      newWs = await pywebview.api.pick_folder(current);
+    } else {
+      newWs = prompt('ระบุ Absolute Path โฟลเดอร์โปรเจกต์:', current);
+    }
+    if (!newWs || newWs === current) return;
+    try {
+      const data = await api('/api/set_workspace', 'POST', { workspace: newWs });
+      if (data && data.success) {
+        showToast('เปลี่ยน Workspace สำเร็จ ✓', '#4ec9b0');
+        await refreshData();
+      } else {
+        showToast((data && data.error) || 'เกิดข้อผิดพลาดในการเปลี่ยน Workspace', '#f48771');
+      }
+    } catch (err) {
+      showToast('Error changing workspace: ' + err.message, '#f48771');
+    }
+  }
+
+  // ── Relative API Client ───────────────────────────────────────────────────
+  async function api(path, method = 'GET', body = null) {
+    const opts = { method, headers: { 'Content-Type': 'application/json' } };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(path, opts);
+    return res.json();
+  }
+
+  // ── Safe Storage Helpers (Node / Browser resilient) ────────────────────────
+  function getStorage(key, fallback) {
+    try {
+      if (typeof localStorage !== 'undefined' && localStorage && localStorage.getItem) {
+        const v = localStorage.getItem(key);
+        return v !== null ? v : fallback;
+      }
+    } catch (e) {}
+    return fallback;
+  }
+
+  function setStorage(key, val) {
+    try {
+      if (typeof localStorage !== 'undefined' && localStorage && localStorage.setItem) {
+        localStorage.setItem(key, val);
+      }
+    } catch (e) {}
+  }
+
+  // ── Token Tracking & Swarm Usage Monitor ──────────────────────────────────
+  let tokenBudget = parseInt(getStorage('ag_token_budget', '100000'), 10) || 100000;
+  let tokenResetOffset = {
+    lead: 0,
+    worker1: 0,
+    worker2: 0,
+    worker3: 0,
+    supervisor: 0
+  };
+
+  try {
+    const savedOffset = getStorage('ag_token_reset', null);
+    if (savedOffset) tokenResetOffset = JSON.parse(savedOffset);
+  } catch (e) {}
+
+  let currentRawAgentTokens = {
+    lead: 0,
+    worker1: 0,
+    worker2: 0,
+    worker3: 0,
+    supervisor: 0
+  };
+
+  let currentAgentMsgCount = {
+    lead: 0,
+    worker1: 0,
+    worker2: 0,
+    worker3: 0,
+    supervisor: 0
+  };
+
+  // Heuristic token calculation: ~3.8 chars/token for ascii/code, ~0.8 chars/token for Thai/Unicode, +4 overhead
+  function estimateTokens(text) {
+    if (!text) return 0;
+    const str = String(text);
+    let nonAscii = 0;
+    let ascii = 0;
+    for (let i = 0; i < str.length; i++) {
+      if (str.charCodeAt(i) > 127) nonAscii++;
+      else ascii++;
+    }
+    return Math.ceil(ascii / 3.8 + nonAscii * 0.8) + 4;
+  }
+
+  function formatTokenNum(num) {
+    if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'k';
+    return String(num);
+  }
+
+  function changeTokenBudget(val) {
+    tokenBudget = parseInt(val, 10) || 100000;
+    setStorage('ag_token_budget', String(tokenBudget));
+    updateTokenUI();
+    showToast(`ปรับ Token Budget เป็น ${tokenBudget.toLocaleString()} Tokens ✓`);
+  }
+
+  function resetTokenMetrics() {
+    tokenResetOffset = { ...currentRawAgentTokens };
+    setStorage('ag_token_reset', JSON.stringify(tokenResetOffset));
+    showToast('รีเซ็ตสถิติ Token เรียบร้อยแล้ว ✓', '#4ec9b0');
+    updateTokenUI();
+  }
+
+  function calculateTokensFromHub(chatRaw = '', boardRaw = '') {
+    const rawTokens = { lead: 0, worker1: 0, worker2: 0, worker3: 0, supervisor: 0 };
+    const msgCount = { lead: 0, worker1: 0, worker2: 0, worker3: 0, supervisor: 0 };
+
+    if (chatRaw) {
+      const messages = parseChatLog(chatRaw);
+      messages.forEach(m => {
+        const t = estimateTokens(m.rawText);
+        const s = (m.sender || '').toLowerCase();
+        if (s.includes('lead')) {
+          rawTokens.lead += t;
+          msgCount.lead++;
+        } else if (s.includes('worker 1') || s.includes('worker1')) {
+          rawTokens.worker1 += t;
+          msgCount.worker1++;
+        } else if (s.includes('worker 2') || s.includes('worker2')) {
+          rawTokens.worker2 += t;
+          msgCount.worker2++;
+        } else if (s.includes('worker 3') || s.includes('worker3')) {
+          rawTokens.worker3 += t;
+          msgCount.worker3++;
+        } else {
+          rawTokens.supervisor += t;
+          msgCount.supervisor++;
+        }
+      });
+    }
+
+    if (boardRaw) {
+      // Board represents Team Lead prompt / mission contract tokens
+      rawTokens.lead += estimateTokens(boardRaw);
+    }
+
+    currentRawAgentTokens = rawTokens;
+    currentAgentMsgCount = msgCount;
+    updateTokenUI();
+  }
+
+  function updateTokenUI() {
+    const agents = ['lead', 'worker1', 'worker2', 'worker3', 'supervisor'];
+    let totalConsumed = 0;
+    const netTokens = {};
+
+    agents.forEach(a => {
+      const net = Math.max(0, (currentRawAgentTokens[a] || 0) - (tokenResetOffset[a] || 0));
+      netTokens[a] = net;
+      totalConsumed += net;
+    });
+
+    const budget = tokenBudget || 100000;
+    const pct = Math.min(100, Math.round((totalConsumed / budget) * 1000) / 10);
+
+    // Threshold classification:
+    // 🟢 < 70% Normal
+    // 🟡 70% - 90% Warning
+    // 🔴 > 90% Alert
+    let statusClass = 'normal';
+    let statusColor = '#4ec9b0';
+    let statusText = '🟢 ปกติ (< 70%)';
+    if (pct >= 90) {
+      statusClass = 'alert';
+      statusColor = '#f48771';
+      statusText = '🔴 เกินเกณฑ์แจ้งเตือน (> 90%)';
+    } else if (pct >= 70) {
+      statusClass = 'warning';
+      statusColor = '#cca700';
+      statusText = '🟡 ใกล้ถึงขีดจำกัด (70-90%)';
+    }
+
+    // 1. Status Bar Widget
+    const tokenDot = document.getElementById('token-status-dot');
+    const tokenText = document.getElementById('token-status-text');
+    if (tokenDot) tokenDot.style.background = statusColor;
+    if (tokenText) {
+      tokenText.textContent = `⚡ ${formatTokenNum(totalConsumed)} / ${formatTokenNum(budget)} Tokens (${pct}%)`;
+    }
+
+    // 2. Overview Card
+    const totalValEl = document.getElementById('token-total-val');
+    const budgetMaxEl = document.getElementById('token-budget-max');
+    const pctLabelEl = document.getElementById('token-percent-label');
+    const badgeEl = document.getElementById('token-threshold-badge');
+    const barFillEl = document.getElementById('token-bar-fill');
+    const budgetSelectEl = document.getElementById('token-budget-select');
+
+    if (budgetSelectEl && budgetSelectEl.value !== String(budget)) {
+      budgetSelectEl.value = String(budget);
+    }
+    if (totalValEl) totalValEl.textContent = `${totalConsumed.toLocaleString()} Tokens`;
+    if (budgetMaxEl) budgetMaxEl.textContent = `/ ${budget.toLocaleString()}`;
+    if (pctLabelEl) {
+      pctLabelEl.textContent = `${pct}%`;
+      pctLabelEl.style.color = statusColor;
+    }
+    if (badgeEl) {
+      badgeEl.className = `token-threshold-badge ${statusClass}`;
+      badgeEl.textContent = statusText;
+    }
+    if (barFillEl) {
+      barFillEl.className = `token-bar-fill ${statusClass}`;
+      barFillEl.style.width = `${Math.min(100, pct)}%`;
+    }
+
+    // 3. Per-Agent Breakdown Cards
+    agents.forEach(a => {
+      const valEl = document.getElementById(`token-val-${a}`);
+      const pctEl = document.getElementById(`token-pct-${a}`);
+      const fillEl = document.getElementById(`token-fill-${a}`);
+      const count = currentAgentMsgCount[a] || 0;
+      const agentNet = netTokens[a] || 0;
+      const agentPct = totalConsumed > 0 ? Math.round((agentNet / totalConsumed) * 100) : 0;
+
+      if (valEl) valEl.textContent = agentNet.toLocaleString();
+      if (pctEl) pctEl.textContent = `${agentPct}% (${count} msg${count === 1 ? '' : 's'})`;
+      if (fillEl) fillEl.style.width = `${agentPct}%`;
+    });
+  }
+
+  // ── Polling & Integration Loop ────────────────────────────────────────────
+  async function refreshData() {
+    if (isPolling) return;
+    isPolling = true;
+
+    const icon = document.getElementById('refresh-icon');
+    if (icon) icon.classList.add('animate-spin');
+
+    try {
+      const data = await api('/api/status');
+
+      // 1. Workspace
+      if (data.workspace) {
+        const ws = data.workspace.replace(/\\/g, '/');
+        const parts = ws.split('/');
+        const short = parts.slice(-3).join('/');
+        const wsLabel = document.getElementById('ws-label');
+        if (wsLabel) {
+          const textSpan = wsLabel.querySelector('span') || wsLabel;
+          textSpan.textContent = '…/' + short;
+          wsLabel.title = data.workspace;
+        }
+        const statusWs = document.getElementById('status-ws');
+        if (statusWs) statusWs.textContent = short;
+      }
+
+      // 2. Chat Timeline
+      if (data.chat !== lastChatRaw) {
+        lastChatRaw = data.chat;
+        const messages = parseChatLog(data.chat);
+        renderChatFeed(messages);
+        handleAutoScrollOnNewMessages(messages.length);
+      }
+
+      // 3. Process Liveness Tracking
+      if (data.process_status) {
+        updateProcessIndicators(data.process_status);
+      }
+
+      // 4. Central Board
+      if (data.board && data.board !== lastBoardRaw) {
+        lastBoardRaw = data.board;
+        const boardContent = document.getElementById('board-content');
+        if (boardContent) {
+          boardContent.innerHTML = renderMarkdown(data.board);
+        }
+      }
+
+      // 5. Final Review Queue
+      if (data.review && data.review !== lastReviewRaw) {
+        lastReviewRaw = data.review;
+        const reviewContent = document.getElementById('review-content');
+        if (reviewContent) {
+          reviewContent.innerHTML = renderMarkdown(data.review);
+        }
+      }
+
+      // 6. Token Tracking & Resource Monitor
+      calculateTokensFromHub(data.chat, data.board);
+
+      // 7. Cache web UI URLs for openAgentWeb
+      if (data.web_urls) {
+        window._agentWebUrls = data.web_urls;
+        // Update web buttons with URL availability
+        ['lead','worker1','worker2','worker3'].forEach(id => {
+          const webBtn = document.getElementById(`btn-web-${id}`);
+          if (webBtn) {
+            const url = data.web_urls[id];
+            if (url) {
+              webBtn.title = `เปิดหน้า Antigravity ใน Browser: ${url}`;
+              webBtn.style.opacity = '1';
+            } else {
+              webBtn.title = 'ยังไม่มี URL (กด "เปิดแอป" ก่อน แล้วรอซักครู่)';
+              webBtn.style.opacity = '0.5';
+            }
+          }
+        });
+      }
+
+    } catch (e) {
+      // Server reconnecting or starting
+    } finally {
+      isPolling = false;
+      if (icon) icon.classList.remove('animate-spin');
+    }
+  }
+
+  // ── Open Agent Web UI in Browser ─────────────────────────────────────────
+  async function openAgentWeb(agentId) {
+    const cached = window._agentWebUrls && window._agentWebUrls[agentId];
+    if (cached) {
+      window.open(cached, '_blank');
+      showToast(`เปิดหน้า ${agentId} ใน Browser แล้ว ✓`, '#4ec9b0');
+      return;
+    }
+    // If no URL yet, launch app first then open in browser
+    showToast(`กำลังเปิดแอป ${agentId} แล้วเปิดหน้า Login...`, '#007acc');
+    try {
+      await api('/api/launch', 'POST', { target: agentId, open_browser: true });
+      showToast(`กำลังเปิดหน้าจอ ${agentId} ในเบราว์เซอร์ (รอซักครู่)...`, '#ce9178');
+      // Refresh after 4 seconds to pick up the URL
+      setTimeout(async () => {
+        await refreshData();
+        const url = window._agentWebUrls && window._agentWebUrls[agentId];
+        if (url) {
+          window.open(url, '_blank');
+          showToast(`เปิดหน้า ${agentId} ใน Browser สำเร็จ ✓`, '#4ec9b0');
+        }
+      }, 4000);
+    } catch (e) {
+      showToast(`เปิดไม่ได้: ${e.message}`, '#f48771');
+    }
+  }
+
+  // ── DOM Initialization ────────────────────────────────────────────────────
+  document.addEventListener('DOMContentLoaded', () => {
+    window._agentWebUrls = {};
+    setupAutoScroll();
+    switchView('chat');
+    updateTokenUI();
+    refreshData();
+    setInterval(refreshData, 3000);
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "workspace": "C:\\Users\\MBx13\\.gemini\\antigravity\\scratch\\agenthub-orchestrator",
+  "agents": [
+    "lead",
+    "worker1",
+    "worker2"
+  ]
+}
