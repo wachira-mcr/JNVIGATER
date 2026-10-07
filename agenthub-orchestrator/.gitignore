@@ -1,0 +1,11 @@
+# runtime / machine state
+.webview_data/
+.agenthub/
+.agents/
+__pycache__/
+.pytest_cache/
+# generated per launch by write_agent_rules()
+AGENTS.md
+GEMINI.md
+# session notes with local account details
+HANDOFF.md
