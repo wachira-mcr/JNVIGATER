@@ -289,14 +289,15 @@ def _native_save_dialog(default_filename, initial_dir=None):
     Add-Type -AssemblyName System.Windows.Forms
     $dlg = New-Object System.Windows.Forms.SaveFileDialog
     $dlg.Filter = 'All Files (*.*)|*.*'
-    $dlg.FileName = '{default_filename}'
+    $dlg.FileName = '{str(default_filename).replace("'", "''")}'
     """
     if initial_dir:
         ps_script += f"\n    $dlg.InitialDirectory = '{initial_dir}'"
         
     ps_script += """
     $dlg.Title = 'Save As'
-    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+    $owner = New-Object System.Windows.Forms.Form -Property @{TopMost=$true; ShowInTaskbar=$false}
+    if ($dlg.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
         Write-Output $dlg.FileName
     }
     """
@@ -1527,8 +1528,39 @@ def parse_plsql_outline(code):
             
     return outline
 
+PLSQL_BACKUP_REPO = r"D:\WORK\PLSQL_Backup"  # clone of github.com/wachira-mcr/MCR_BACKUP
+
+def _backup_old_source(cursor, alias, obj_name, obj_type):
+    """Write current user_source of the object to the backup repo and push. Raises if the file can't be written."""
+    import os, subprocess, datetime
+    cursor.execute("SELECT text FROM user_source WHERE name = :n AND type = :t ORDER BY line", n=obj_name, t=obj_type)
+    lines = [r[0] for r in cursor.fetchall()]
+    if not lines:
+        return "ไม่มี source เดิม (object ใหม่) — ไม่ได้ backup"
+    ts = datetime.datetime.now()
+    rel = os.path.join(alias, f"{obj_name}_{obj_type.replace(' ', '_')}_{ts:%Y%m%d_%H%M%S}.sql")
+    path = os.path.join(PLSQL_BACKUP_REPO, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "x", encoding="utf-8", newline="") as f:  # "x" = never overwrite an old backup
+        f.write("CREATE OR REPLACE " + "".join(lines).rstrip() + "\n/\n")
+    if not os.path.getsize(path):
+        raise Exception(f"ไฟล์ backup ว่าง: {path}")
+
+    if not os.path.isdir(os.path.join(PLSQL_BACKUP_REPO, ".git")):
+        return f"Backup: {path} (ยังไม่ได้ push — โฟลเดอร์ไม่ใช่ git clone)"
+    git = lambda *a: subprocess.run(["git", *a], cwd=PLSQL_BACKUP_REPO, capture_output=True, text=True, timeout=60)
+    git("pull", "--rebase", "--autostash")
+    git("add", rel)
+    git("commit", "-m", f"Backup {alias} {obj_name} {obj_type} before compile {ts:%Y-%m-%d %H:%M:%S}")
+    push = git("push")
+    sha = git("rev-parse", "--short", "HEAD").stdout.strip()
+    if push.returncode != 0:
+        return f"Backup: {path} (commit {sha}) ⚠️ push ไม่ผ่าน: {push.stderr.strip()[-200:]}"
+    return f"Backup: {path} (pushed {sha})"
+
 @app.route("/api/plsql/compile", methods=["POST"])
 def compile_plsql():
+    global active_session_key, db_sessions
     data = request.json or {}
     code = data.get("code", "").strip()
     name = data.get("name", "").strip().upper()
@@ -1542,12 +1574,27 @@ def compile_plsql():
         
     if not code.upper().startswith("CREATE"):
         code = "CREATE OR REPLACE " + code
-        
+
+    # PROD guard: must re-type the PROD DB password before every compile
+    sess = db_sessions.get(active_session_key) or {}
+    alias_u = (sess.get("alias") or "").upper()
+    if "PROD" in alias_u or ("8000" in alias_u and "DEV" not in alias_u):
+        if data.get("prod_password") != sess.get("password"):
+            return jsonify({"success": False, "need_prod_password": True,
+                            "error": f"⚠️ {alias_u} เป็น PROD — ต้องใส่รหัสผ่าน DB ก่อน Compile"})
+
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         resolved = resolve_plsql_object(cursor, name, obj_type)
         clean_name = resolved["name"] if resolved else name
+
+        # Iron rule: backup the current DB source before compiling; no backup = no compile
+        try:
+            backup_note = _backup_old_source(cursor, sess.get("alias") or "UNKNOWN_SITE", clean_name, obj_type)
+        except Exception as be:
+            cursor.close(); conn.close()
+            return jsonify({"success": False, "error": f"Backup ล้มเหลว — ยกเลิก Compile: {be}"}), 500
 
         cursor.execute(code)
         
@@ -1596,7 +1643,6 @@ def compile_plsql():
             except Exception as e:
                 pass
 
-        global active_session_key, db_sessions
         session_alias = db_sessions[active_session_key].get('alias', 'UNKNOWN_SITE') if active_session_key in db_sessions else 'UNKNOWN_SITE'
         
         # Save & commit to local git repository regardless of compile errors
@@ -1613,7 +1659,7 @@ def compile_plsql():
                 "type": obj_type,
                 "error_count": len(errors),
                 "errors": errors,
-                "message": f"Compilation failed with {len(errors)} error(s)."
+                "message": f"Compilation failed with {len(errors)} error(s). — {backup_note}"
             })
         else:
             return jsonify({
@@ -1621,7 +1667,7 @@ def compile_plsql():
                 "compiled": True,
                 "name": name,
                 "type": obj_type,
-                "message": f"Successfully compiled {obj_type} {name} into database!"
+                "message": f"Successfully compiled {obj_type} {name} into database! — {backup_note}"
             })
             
     except Exception as e:
@@ -2361,7 +2407,16 @@ STANDALONE_EDITOR_TEMPLATE = r"""
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name: name, type: objType, code: code })
                 });
-                const data = await res.json();
+                let data = await res.json();
+                if (data.need_prod_password) {
+                    const pw = prompt(data.error + "\\nกรอกรหัสผ่าน DB PROD:");
+                    if (pw === null) { consoleBox.innerHTML = '<span style="color:#ce9178;">ยกเลิก Compile (PROD)</span>'; return; }
+                    data = await (await fetch('/api/plsql/compile', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: name, type: objType, code: code, prod_password: pw })
+                    })).json();
+                }
 
                 if (data.success) {
                     consoleBox.innerHTML = `<span style="color:#4ec9b0; font-weight:600;">✅ ${data.message}</span>`;
@@ -2429,6 +2484,7 @@ STANDALONE_EDITOR_TEMPLATE = r"""
                     <div class="modal-content" style="width: 420px; text-align:center; padding:30px;">
                         <h3 style="margin-top:0; color:var(--accent-teal);">📁 กำลังเตรียมบันทึก...</h3>
                         <div id="exportProgressText" style="color:var(--text-muted); font-size:0.9rem; margin-top:10px;">หน้าต่าง Save As กำลังเปิดขึ้น...</div>
+                        <button class="btn" style="margin-top:16px;" onclick="document.getElementById('exportProgressModal')?.remove()">✖ ยกเลิก / ปิด</button>
                     </div>
                 </div>
             `);
@@ -4751,7 +4807,17 @@ HTML_TEMPLATE = r"""
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
-                const data = await res.json();
+                let data = await res.json();
+                if (data.need_prod_password) {
+                    const pw = prompt(data.error + "\\nกรอกรหัสผ่าน DB PROD:");
+                    if (pw === null) { consoleBox.innerHTML = '<span style="color: var(--warning);">ยกเลิก Compile (PROD)</span>'; return; }
+                    payload.prod_password = pw;
+                    data = await (await fetch('/api/plsql/compile', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    })).json();
+                }
 
                 if (data.success) {
                     consoleBox.innerHTML = `
@@ -5990,6 +6056,7 @@ HTML_TEMPLATE = r"""
                     <div class="modal-content" style="width: 420px; text-align:center; padding:30px;">
                         <h3 style="margin-top:0; color:var(--accent-teal);">📁 เลือกที่บันทึกไฟล์...</h3>
                         <div id="exportProgressText" style="color:var(--text-muted); font-size:0.9rem; margin-top:10px;">หน้าต่าง Save As กำลังเปิดขึ้น...</div>
+                        <button class="btn" style="margin-top:16px;" onclick="document.getElementById('exportProgressModal')?.remove()">✖ ยกเลิก / ปิด</button>
                     </div>
                 </div>
             `);
@@ -6145,6 +6212,7 @@ HTML_TEMPLATE = r"""
                     <div class="modal-content" style="width: 420px; text-align:center; padding:30px;">
                         <h3 style="margin-top:0; color:var(--accent-teal);">📁 กำลังเตรียมบันทึก...</h3>
                         <div id="exportProgressText" style="color:var(--text-muted); font-size:0.9rem; margin-top:10px;">หน้าต่าง Save As กำลังเปิดขึ้น...</div>
+                        <button class="btn" style="margin-top:16px;" onclick="document.getElementById('exportProgressModal')?.remove()">✖ ยกเลิก / ปิด</button>
                     </div>
                 </div>
             `);
