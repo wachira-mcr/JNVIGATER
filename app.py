@@ -518,9 +518,19 @@ def manage_profiles():
         profiles_data = load_saved_profiles()
         return jsonify({"success": True, "profiles": profiles_data["profiles"], "ai_key": profiles_data.get("ai_key"), "last_used_alias": profiles_data.get("last_used_alias")})
 
-@app.route("/api/sessions", methods=["GET", "POST"])
+def _is_prod_alias(alias):
+    a = (alias or "").upper()
+    return "PROD" in a or ("8000" in a and "DEV" not in a)
+
+@app.route("/api/sessions", methods=["GET", "POST", "DELETE"])
 def manage_sessions():
     global active_session_key, db_sessions
+    if request.method == "DELETE":
+        key = (request.json or {}).get("session_key")
+        db_sessions.pop(key, None)
+        if active_session_key == key:
+            active_session_key = next(iter(db_sessions), None)
+        return jsonify({"success": True, "active_session": active_session_key})
     if request.method == "POST":
         data = request.json or {}
         key = data.get("session_key")
@@ -535,6 +545,7 @@ def manage_sessions():
                 "session_key": k,
                 "user": v["user"],
                 "alias": v["alias"],
+                "is_prod": _is_prod_alias(v["alias"]),
                 "is_active": (k == active_session_key)
             })
         return jsonify({"success": True, "active_session": active_session_key, "sessions": sessions_list})
@@ -1528,7 +1539,26 @@ def parse_plsql_outline(code):
             
     return outline
 
-PLSQL_BACKUP_REPO = r"D:\WORK\PLSQL_Backup"  # clone of github.com/wachira-mcr/MCR_BACKUP
+PLSQL_BACKUP_REPO = r"D:\WORK\EBS_Git_Repo"  # local clone of github.com/wachira-mcr/MCR_BACKUP
+
+def _backup_rel_dir(cursor, alias, obj_name, obj_type):
+    """<ALIAS>/<Concurrent Program Name> if the object is a concurrent executable, else <ALIAS>/<TYPE> (old layout)."""
+    import os, re
+    sub = obj_type.replace(' ', '_')
+    try:
+        cursor.execute("""
+            SELECT pt.user_concurrent_program_name
+            FROM apps.fnd_executables e
+            JOIN apps.fnd_concurrent_programs p ON p.executable_id = e.executable_id AND p.executable_application_id = e.application_id
+            JOIN apps.fnd_concurrent_programs_tl pt ON pt.concurrent_program_id = p.concurrent_program_id AND pt.application_id = p.application_id AND pt.language = 'US'
+            WHERE UPPER(e.execution_file_name) = :n OR UPPER(e.execution_file_name) LIKE :n || '.%'
+            ORDER BY p.enabled_flag DESC, p.concurrent_program_id""", n=obj_name)
+        row = cursor.fetchone()
+        if row and row[0]:
+            sub = re.sub(r'[\\/:*?"<>|]+', '_', row[0]).strip(' .')
+    except Exception:
+        pass  # non-EBS schema / no access to FND tables -> keep type folder
+    return os.path.join(alias or "UNKNOWN_SITE", sub)
 
 def _backup_old_source(cursor, alias, obj_name, obj_type):
     """Write current user_source of the object to the backup repo and push. Raises if the file can't be written."""
@@ -1538,7 +1568,7 @@ def _backup_old_source(cursor, alias, obj_name, obj_type):
     if not lines:
         return "ไม่มี source เดิม (object ใหม่) — ไม่ได้ backup"
     ts = datetime.datetime.now()
-    rel = os.path.join(alias, f"{obj_name}_{obj_type.replace(' ', '_')}_{ts:%Y%m%d_%H%M%S}.sql")
+    rel = os.path.join(_backup_rel_dir(cursor, alias, obj_name, obj_type), "_before_compile", f"{obj_name}_{obj_type.replace(' ', '_')}_{ts:%Y%m%d_%H%M%S}.sql")
     path = os.path.join(PLSQL_BACKUP_REPO, rel)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "x", encoding="utf-8", newline="") as f:  # "x" = never overwrite an old backup
@@ -1548,10 +1578,13 @@ def _backup_old_source(cursor, alias, obj_name, obj_type):
 
     if not os.path.isdir(os.path.join(PLSQL_BACKUP_REPO, ".git")):
         return f"Backup: {path} (ยังไม่ได้ push — โฟลเดอร์ไม่ใช่ git clone)"
-    git = lambda *a: subprocess.run(["git", *a], cwd=PLSQL_BACKUP_REPO, capture_output=True, text=True, timeout=60)
+    git = lambda *a: subprocess.run(["git", "-c", "user.name=JNavigator Auto", "-c", "user.email=auto@jnavigator.local", *a],
+                                    cwd=PLSQL_BACKUP_REPO, capture_output=True, text=True, timeout=60)
     git("pull", "--rebase", "--autostash")
     git("add", rel)
-    git("commit", "-m", f"Backup {alias} {obj_name} {obj_type} before compile {ts:%Y-%m-%d %H:%M:%S}")
+    commit = git("commit", "-m", f"Backup {alias} {obj_name} {obj_type} before compile {ts:%Y-%m-%d %H:%M:%S}")
+    if commit.returncode != 0:
+        return f"Backup: {path} ⚠️ commit ไม่ผ่าน: {(commit.stderr or commit.stdout).strip()[-200:]}"
     push = git("push")
     sha = git("rev-parse", "--short", "HEAD").stdout.strip()
     if push.returncode != 0:
@@ -1575,13 +1608,13 @@ def compile_plsql():
     if not code.upper().startswith("CREATE"):
         code = "CREATE OR REPLACE " + code
 
-    # PROD guard: must re-type the PROD DB password before every compile
+    # Target guard: user must confirm the server-side active DB; PROD also needs the DB password
     sess = db_sessions.get(active_session_key) or {}
-    alias_u = (sess.get("alias") or "").upper()
-    if "PROD" in alias_u or ("8000" in alias_u and "DEV" not in alias_u):
-        if data.get("prod_password") != sess.get("password"):
-            return jsonify({"success": False, "need_prod_password": True,
-                            "error": f"⚠️ {alias_u} เป็น PROD — ต้องใส่รหัสผ่าน DB ก่อน Compile"})
+    is_prod = _is_prod_alias(sess.get("alias"))
+    if data.get("confirm_target") != active_session_key or (is_prod and data.get("prod_password") != sess.get("password")):
+        return jsonify({"success": False, "need_confirm": True, "target": active_session_key, "is_prod": is_prod,
+                        "error": f"⚠️ {active_session_key} เป็น PROD — ต้องใส่รหัสผ่าน DB ก่อน Compile" if is_prod
+                                 else f"ยืนยัน Compile ลง DB: {active_session_key} ?"})
 
     try:
         conn = get_db_connection()
@@ -1613,14 +1646,8 @@ def compile_plsql():
             
         def _auto_save_and_commit(session_alias, obj_type, obj_name, code):
             import os, subprocess, datetime
-            base_repo = r"D:\WORK\EBS_Git_Repo"
-            
-            if not session_alias:
-                session_alias = "UNKNOWN_SITE"
-                
-            site_dir = os.path.join(base_repo, session_alias)
-            type_dir = os.path.join(site_dir, obj_type.replace(' ', '_'))
-            
+            base_repo = PLSQL_BACKUP_REPO
+            type_dir = os.path.join(base_repo, _backup_rel_dir(cursor, session_alias, obj_name, obj_type))
             os.makedirs(type_dir, exist_ok=True)
             
             file_name = f"{obj_name}.sql" if obj_name else "unknown.sql"
@@ -2408,13 +2435,14 @@ STANDALONE_EDITOR_TEMPLATE = r"""
                     body: JSON.stringify({ name: name, type: objType, code: code })
                 });
                 let data = await res.json();
-                if (data.need_prod_password) {
-                    const pw = prompt(data.error + "\\nกรอกรหัสผ่าน DB PROD:");
-                    if (pw === null) { consoleBox.innerHTML = '<span style="color:#ce9178;">ยกเลิก Compile (PROD)</span>'; return; }
+                if (data.need_confirm) {
+                    let pw = null;
+                    if (data.is_prod) pw = prompt(data.error + "\\nกรอกรหัสผ่าน DB PROD:");
+                    if (data.is_prod ? pw === null : !confirm(data.error)) { consoleBox.innerHTML = '<span style="color:#ce9178;">ยกเลิก Compile</span>'; return; }
                     data = await (await fetch('/api/plsql/compile', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name: name, type: objType, code: code, prod_password: pw })
+                        body: JSON.stringify({ name: name, type: objType, code: code, confirm_target: data.target, prod_password: pw })
                     })).json();
                 }
 
@@ -3103,6 +3131,12 @@ HTML_TEMPLATE = r"""
             <select id="dbSessionSelect" onchange="switchDbSession(this.value)">
                 <option value="">-- No DB Connected --</option>
             </select>
+            <span id="prodBadge" style="display:none; background:#e5484d; color:#fff; font-weight:700; font-size:0.75rem; padding:2px 8px; border-radius:4px;">⚠️ PROD</span>
+            <button class="btn" title="Disconnect session ที่เลือก" onclick="disconnectDbSession()" style="padding:2px 8px;">✖</button>
+            <style>
+                body.prod-active::after { content:''; position:fixed; inset:0; border:4px solid #e5484d; pointer-events:none; z-index:99999; }
+                body.prod-active #dbSessionSelect { border-color:#e5484d; color:#ff8a8a; }
+            </style>
         </div>
     </header>
 
@@ -4042,12 +4076,15 @@ HTML_TEMPLATE = r"""
                 if (data.success) {
                     const select = document.getElementById('dbSessionSelect');
                     select.innerHTML = '';
+                    const prodActive = (data.sessions || []).some(s => s.is_active && s.is_prod);
+                    document.body.classList.toggle('prod-active', prodActive);
+                    document.getElementById('prodBadge').style.display = prodActive ? '' : 'none';
                     if (data.sessions && data.sessions.length > 0) {
                         document.getElementById('statusDot').className = 'dot connected';
                         data.sessions.forEach(s => {
                             const opt = document.createElement('option');
                             opt.value = s.session_key;
-                            opt.textContent = `${s.session_key}${s.is_active ? ' (Active)' : ''}`;
+                            opt.textContent = `${s.is_prod ? '⚠️ ' : ''}${s.session_key}${s.is_active ? ' (Active)' : ''}`;
                             if (s.is_active) opt.selected = true;
                             select.appendChild(opt);
                         });
@@ -4062,6 +4099,19 @@ HTML_TEMPLATE = r"""
             } catch(e) {
                 console.error("Sessions error:", e);
             }
+        }
+
+        async function disconnectDbSession() {
+            const key = document.getElementById('dbSessionSelect').value;
+            if (!key || !confirm(`Disconnect ${key} ?`)) return;
+            await fetch('/api/sessions', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_key: key })
+            });
+            tableList = [];
+            await loadSessionsList();
+            fetchTables();
         }
 
         async function switchDbSession(key) {
@@ -4808,9 +4858,11 @@ HTML_TEMPLATE = r"""
                     body: JSON.stringify(payload)
                 });
                 let data = await res.json();
-                if (data.need_prod_password) {
-                    const pw = prompt(data.error + "\\nกรอกรหัสผ่าน DB PROD:");
-                    if (pw === null) { consoleBox.innerHTML = '<span style="color: var(--warning);">ยกเลิก Compile (PROD)</span>'; return; }
+                if (data.need_confirm) {
+                    let pw = null;
+                    if (data.is_prod) pw = prompt(data.error + "\\nกรอกรหัสผ่าน DB PROD:");
+                    if (data.is_prod ? pw === null : !confirm(data.error)) { consoleBox.innerHTML = '<span style="color: var(--warning);">ยกเลิก Compile</span>'; return; }
+                    payload.confirm_target = data.target;
                     payload.prod_password = pw;
                     data = await (await fetch('/api/plsql/compile', {
                         method: 'POST',
