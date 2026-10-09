@@ -5099,7 +5099,7 @@ HTML_TEMPLATE = r"""
                 
                 // 5. RTF Template
                 if (r.program_type && (r.program_type.includes('RTF') || r.program_type.includes('XML Publisher') || r.program_type.includes('PL/SQL') || r.program_type.includes('Oracle Reports'))) {
-                    actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #10b981, #059669);" onclick="downloadTemplate('', '')" title="Download RTF Template">📥 RTF</button>`);
+                    actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #10b981, #059669);" onclick="downloadTemplate('${safeProgShort}', '${safeUserProgName}')" title="Download RTF Template">📥 RTF</button>`);
                     actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #14b8a6, #0f766e);" onclick="triggerUploadRtf('${r.program_short_name || ''}')" title="Upload and Backup RTF Template">📤 RTF</button>`);
                 }
 
@@ -8649,6 +8649,27 @@ def api_sftp_download():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
+def replace_keep_old(new_tmp, final_path):
+    """Move a freshly downloaded new_tmp onto final_path without losing the old file.
+
+    An existing, different final_path is first renamed to <name>_old_<its mtime><ext>.
+    If the content is identical the download is dropped and nothing changes.
+    Returns the archived path, or None when nothing was archived.
+    """
+    import filecmp, datetime
+    archived = None
+    if os.path.exists(final_path):
+        if filecmp.cmp(new_tmp, final_path, shallow=False):
+            os.remove(new_tmp)
+            return None
+        ts = datetime.datetime.fromtimestamp(os.path.getmtime(final_path)).strftime("%Y%m%d_%H%M%S")
+        base, ext = os.path.splitext(final_path)
+        archived = f"{base}_old_{ts}{ext}"
+        os.replace(final_path, archived)
+    os.replace(new_tmp, final_path)
+    return archived
+
+
 def git_report_save(session_alias, obj_category, report_name, file_name, file_content):
     import os, subprocess, datetime
     base_repo = r"D:\WORK\EBS_Git_Repo"
@@ -8925,8 +8946,9 @@ def api_sftp_download_oracle_report():
             os.makedirs(output_folder)
             
         local_path = os.path.join(output_folder, file_name)
-        sftp.get(found_remote, local_path)
-        
+        sftp.get(found_remote, local_path + ".part")
+        archived = replace_keep_old(local_path + ".part", local_path)
+
         try:
             with open(local_path, "rb") as f:
                 git_report_save(db_name, "RDF", report_name_folder, file_name, f.read())
@@ -8936,7 +8958,7 @@ def api_sftp_download_oracle_report():
         sftp.close()
         ssh.close()
         
-        return jsonify({"success": True, "path": local_path, "filename": file_name, "site": db_name, "git_backup": True})
+        return jsonify({"success": True, "path": local_path, "filename": file_name, "site": db_name, "git_backup": True, "archived_old": archived})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
@@ -9199,6 +9221,7 @@ def api_download_template():
             
         files_downloaded = 0
         downloaded_paths = []
+        archived_paths = []
         for row in cursor:
             original_file_name = row[0]
             ext = os.path.splitext(original_file_name)[1]
@@ -9217,9 +9240,12 @@ def api_download_template():
                 output_path = os.path.join(output_folder, file_name)
                 
                 # เขียนไฟล์ลงเครื่อง (ใช้โหมด 'wb' สำหรับ Binary File)
-                with open(output_path, "wb") as f:
+                with open(output_path + ".part", "wb") as f:
                     f.write(blob_data)
-                
+                archived = replace_keep_old(output_path + ".part", output_path)
+                if archived:
+                    archived_paths.append(archived)
+
                 try:
                     git_report_save(db_name, "TEMPLATE", safe_folder or template_code, file_name, blob_data)
                 except Exception:
@@ -9237,6 +9263,7 @@ def api_download_template():
                 "success": True, 
                 "path": first_path,
                 "paths": downloaded_paths,
+                "archived_old": archived_paths,
                 "template_code": template_code,
                 "site": db_name,
                 "git_backup": True
