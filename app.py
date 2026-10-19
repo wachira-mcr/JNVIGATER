@@ -3059,6 +3059,40 @@ HTML_TEMPLATE = r"""
 
         #monacoEditorMainContainer { flex: 1; border: 1px solid var(--panel-border); border-radius: 0 6px 6px 0; overflow: hidden; }
 
+        /* Diff Editor & Merge Styles */
+        .diff-glyph-merge-btn {
+            cursor: pointer;
+            background: #238636 !important;
+            color: #ffffff !important;
+            border-radius: 3px;
+            display: flex !important;
+            align-items: center;
+            justify-content: center;
+            width: 15px !important;
+            height: 15px !important;
+            margin-left: 2px;
+            margin-top: 2px;
+            font-size: 13px;
+            font-weight: 900;
+            line-height: 15px;
+            text-align: center;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.6);
+            transition: transform 0.15s ease, background 0.15s ease;
+            z-index: 10;
+        }
+        .diff-glyph-merge-btn:hover {
+            background: #2ea043 !important;
+            transform: scale(1.3);
+            box-shadow: 0 2px 6px rgba(46, 160, 67, 0.6);
+        }
+        .diff-glyph-merge-btn::before {
+            content: "+";
+            display: block;
+            color: #ffffff !important;
+            font-family: system-ui, -apple-system, sans-serif;
+            font-weight: 900;
+        }
+
         .tree-node-wrapper { display: flex; align-items: center; justify-content: space-between; }
         .btn-run-proc { background: rgba(56, 139, 253, 0.1); border: 1px solid rgba(56, 139, 253, 0.25); color: var(--accent-blue); font-size: 0.63rem; padding: 2px 6px; border-radius: 3px; cursor: pointer; display: none; }
         .tree-node-wrapper:hover .btn-run-proc { display: block; }
@@ -3329,7 +3363,42 @@ HTML_TEMPLATE = r"""
                         <div class="resizer-v" id="mainExplorerResizer"></div>
 
                         <div id="monacoEditorMainContainer"></div>
-                        <div id="monacoDiffEditorMainContainer" style="display:none; flex: 1; border: 1px solid var(--panel-border); border-radius: 0 6px 6px 0; overflow: hidden; background: var(--bg-dark);"></div>
+                        <div id="monacoDiffEditorMainContainer" style="display:none; flex: 1; flex-direction: column; border: 1px solid var(--panel-border); border-radius: 0 6px 6px 0; overflow: hidden; background: var(--bg-dark);">
+                            <!-- Diff Editor Toolbar / Header -->
+                            <div id="diffEditorHeader" style="display: flex; align-items: center; justify-content: space-between; padding: 6px 14px; background: #161b22; border-bottom: 1px solid var(--panel-border); font-size: 0.78rem; min-height: 38px;">
+                                <!-- Left side: Working File (ช่องการทำงาน) -->
+                                <div id="diffLabelLeft" style="display: flex; align-items: center; gap: 8px;">
+                                    <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#38bdf8;"></span>
+                                    <span style="color: #58a6ff; font-weight: 700; font-size: 0.82rem;">📝 ช่องการทำงาน (Working File)</span>
+                                    <span style="font-size: 0.72rem; color: #8b949e; background: #21262d; padding: 1px 6px; border-radius: 4px; border: 1px solid #30363d;">แก้ไขได้ / พร้อม Compile</span>
+                                </div>
+
+                                <!-- Center controls: Merge & Navigation -->
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <span id="diffChangeBadge" style="background: #21262d; border: 1px solid #30363d; padding: 3px 10px; border-radius: 12px; font-size: 0.74rem; color: #e6edf3; font-weight: 600;">0 Changes</span>
+                                    <button class="btn btn-secondary" style="padding: 3px 8px; font-size: 0.75rem;" onclick="prevDiffChange()" title="Previous Difference (Shift+F7)">▲ Prev</button>
+                                    <button class="btn btn-secondary" style="padding: 3px 8px; font-size: 0.75rem;" onclick="nextDiffChange()" title="Next Difference (F7)">▼ Next</button>
+                                    <button class="btn btn-success" id="btnMergeCurrentDiff" style="padding: 3px 10px; font-size: 0.75rem; font-weight: 600; display: flex; align-items: center; gap: 4px;" onclick="mergeCurrentDiffHunk()" title="Merge active change from Compare into Working File">
+                                        <span>➕ Merge Change</span>
+                                    </button>
+                                    <button class="btn btn-primary" id="btnMergeAllDiff" style="padding: 3px 10px; font-size: 0.75rem; font-weight: 600; display: flex; align-items: center; gap: 4px;" onclick="mergeAllDiffHunks()" title="Merge all differences into Working File">
+                                        <span>➕ Merge All</span>
+                                    </button>
+                                    <button class="btn btn-secondary" style="padding: 3px 8px; font-size: 0.75rem;" onclick="swapDiffSides()" title="Swap left and right panes">🔄 Swap Sides</button>
+                                </div>
+
+                                <!-- Right side: Compare Reference (ตัวที่นำมา compare) -->
+                                <div id="diffLabelRight" style="display: flex; align-items: center; gap: 10px;">
+                                    <label class="btn btn-secondary" style="padding: 2px 8px; font-size: 0.72rem; cursor: pointer; margin: 0;" title="Load another file from PC to compare">
+                                        📂 Load File
+                                        <input type="file" id="diffFileInput" style="display:none;" onchange="loadCompareFromFile(event)">
+                                    </label>
+                                    <span style="color: #f0883e; font-weight: 700; font-size: 0.82rem;">⚖️ ตัวที่นำมา compare (Reference / DB)</span>
+                                    <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#f0883e;"></span>
+                                </div>
+                            </div>
+                            <div id="monacoDiffEditorInner" style="flex: 1; width: 100%; height: 100%; min-height: 0; position: relative;"></div>
+                        </div>
                     </div>
 
                     <div class="resizer-h" id="consoleResizer"></div>
@@ -4226,6 +4295,12 @@ HTML_TEMPLATE = r"""
         }
 
         function switchPlsqlSubtab(id) {
+            if (isDiffMode) {
+                toggleDiffMode();
+            } else if (mainMonacoEditor && activePlsqlTabId) {
+                const prevTab = plsqlTabs.find(t => t.id === activePlsqlTabId);
+                if (prevTab) prevTab.code = mainMonacoEditor.getValue();
+            }
             activePlsqlTabId = id;
             const tab = plsqlTabs.find(t => t.id === id);
             if (tab) {
@@ -4240,6 +4315,9 @@ HTML_TEMPLATE = r"""
         }
 
         function closePlsqlSubtab(id) {
+            if (activePlsqlTabId === id && isDiffMode) {
+                toggleDiffMode();
+            }
             plsqlTabs = plsqlTabs.filter(t => t.id !== id);
             if (activePlsqlTabId === id) {
                 if (plsqlTabs.length > 0) {
@@ -4702,7 +4780,13 @@ HTML_TEMPLATE = r"""
                 code = sqlMonacoEditor ? sqlMonacoEditor.getValue() : '';
                 defaultName = 'query_backup.sql';
             } else if (type === 'PLSQL') {
-                code = mainMonacoEditor ? mainMonacoEditor.getValue() : '';
+                if (isDiffMode && monacoDiffEditor) {
+                    const model = monacoDiffEditor.getModel();
+                    const workingModel = model ? (isSidesSwapped ? model.modified : model.original) : null;
+                    code = workingModel ? workingModel.getValue() : '';
+                } else {
+                    code = mainMonacoEditor ? mainMonacoEditor.getValue() : '';
+                }
                 defaultName = 'plsql_backup.sql';
             }
             
@@ -4745,6 +4829,12 @@ HTML_TEMPLATE = r"""
             }
         }
 
+        let activeDiffIndex = 0;
+        let leftDecorationsCollection = null;
+        let rightDecorationsCollection = null;
+        let diffEditorListenersAttached = false;
+        let isSidesSwapped = false;
+
         function toggleDiffMode() {
             if (!activePlsqlTabId) {
                 alert("กรุณาเปิดไฟล์ก่อน (Please open a file first)");
@@ -4756,6 +4846,7 @@ HTML_TEMPLATE = r"""
 
             const mainContainer = document.getElementById('monacoEditorMainContainer');
             const diffContainer = document.getElementById('monacoDiffEditorMainContainer');
+            const diffInner = document.getElementById('monacoDiffEditorInner');
             const btnToggle = document.getElementById('btnToggleDiff');
 
             if (!isDiffMode) {
@@ -4768,29 +4859,54 @@ HTML_TEMPLATE = r"""
                 }
 
                 mainContainer.style.display = 'none';
-                diffContainer.style.display = 'block';
+                diffContainer.style.display = 'flex';
                 btnToggle.innerHTML = '📝 Edit Mode';
                 btnToggle.classList.replace('btn-secondary', 'btn-primary');
 
                 if (!monacoDiffEditor) {
-                    monacoDiffEditor = monaco.editor.createDiffEditor(diffContainer, {
+                    monacoDiffEditor = monaco.editor.createDiffEditor(diffInner, {
                         theme: 'jnav-dark',
                         enableSplitViewResizing: true,
                         renderSideBySide: true,
-                        originalEditable: true,
-                        renderMarginRevertIcon: true
+                        originalEditable: true,      // LEFT editor (Working File) is fully editable!
+                        readOnly: false,
+                        renderMarginRevertIcon: false,
+                        glyphMargin: true,
+                        lineNumbers: 'on',
+                        folding: true,
+                        automaticLayout: true
                     });
+
+                    // Ensure glyph margin is enabled on both sub-editors
+                    monacoDiffEditor.getOriginalEditor().updateOptions({ glyphMargin: true });
+                    monacoDiffEditor.getModifiedEditor().updateOptions({ glyphMargin: true });
+
+                    monacoDiffEditor.onDidUpdateDiff(() => {
+                        updateDiffDecorationsAndBadges();
+                    });
+
+                    setupDiffEditorListeners();
                 }
 
-                const originalModel = monaco.editor.createModel(currentTab.originalCode || '', 'sql');
-                const modifiedModel = monaco.editor.createModel(currentTab.code || '', 'sql');
+                isSidesSwapped = false;
+                resetDiffLabels();
+
+                // LEFT (original) = Working File (ช่องการทำงาน - currentTab.code)
+                // RIGHT (modified) = Compare Reference (ตัวที่นำมา compare - currentTab.originalCode)
+                const workingModel = monaco.editor.createModel(currentTab.code || '', 'sql');
+                const compareModel = monaco.editor.createModel(currentTab.compareCode || currentTab.originalCode || '', 'sql');
                 monacoDiffEditor.setModel({
-                    original: originalModel,
-                    modified: modifiedModel
+                    original: workingModel,
+                    modified: compareModel
                 });
                 
-                // Force layout update
-                setTimeout(() => monacoDiffEditor.layout(), 50);
+                // Force layout update and update badges/decorations
+                setTimeout(() => {
+                    if (monacoDiffEditor) {
+                        monacoDiffEditor.layout();
+                        updateDiffDecorationsAndBadges();
+                    }
+                }, 80);
 
             } else {
                 // Exit Diff Mode
@@ -4798,8 +4914,13 @@ HTML_TEMPLATE = r"""
                 
                 // Save current edits from diff editor back to tab code
                 if (monacoDiffEditor) {
-                    const modifiedModel = monacoDiffEditor.getModel().modified;
-                    currentTab.code = modifiedModel.getValue();
+                    const model = monacoDiffEditor.getModel();
+                    if (model) {
+                        const workingModel = isSidesSwapped ? model.modified : model.original;
+                        if (workingModel) {
+                            currentTab.code = workingModel.getValue();
+                        }
+                    }
                 }
 
                 diffContainer.style.display = 'none';
@@ -4813,7 +4934,323 @@ HTML_TEMPLATE = r"""
             }
         }
 
+        function resetDiffLabels() {
+            const lblLeft = document.getElementById('diffLabelLeft');
+            const lblRight = document.getElementById('diffLabelRight');
+            if (lblLeft && lblRight) {
+                lblLeft.innerHTML = `
+                    <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#38bdf8;"></span>
+                    <span style="color: #58a6ff; font-weight: 700; font-size: 0.82rem;">📝 ช่องการทำงาน (Working File)</span>
+                    <span style="font-size: 0.72rem; color: #8b949e; background: #21262d; padding: 1px 6px; border-radius: 4px; border: 1px solid #30363d;">แก้ไขได้ / พร้อม Compile</span>
+                `;
+                lblRight.innerHTML = `
+                    <label class="btn btn-secondary" style="padding: 2px 8px; font-size: 0.72rem; cursor: pointer; margin: 0;" title="Load another file from PC to compare">
+                        📂 Load File
+                        <input type="file" id="diffFileInput" style="display:none;" onchange="loadCompareFromFile(event)">
+                    </label>
+                    <span style="color: #f0883e; font-weight: 700; font-size: 0.82rem;">⚖️ ตัวที่นำมา compare (Reference / DB)</span>
+                    <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#f0883e;"></span>
+                `;
+            }
+        }
+
+        function swapDiffSides() {
+            if (!monacoDiffEditor) return;
+            const model = monacoDiffEditor.getModel();
+            if (!model || !model.original || !model.modified) return;
+
+            isSidesSwapped = !isSidesSwapped;
+
+            const curOrig = model.original;
+            const curMod = model.modified;
+
+            monacoDiffEditor.setModel({
+                original: curMod,
+                modified: curOrig
+            });
+
+            const lblLeft = document.getElementById('diffLabelLeft');
+            const lblRight = document.getElementById('diffLabelRight');
+            if (lblLeft && lblRight) {
+                const temp = lblLeft.innerHTML;
+                lblLeft.innerHTML = lblRight.innerHTML;
+                lblRight.innerHTML = temp;
+            }
+
+            setTimeout(() => {
+                if (monacoDiffEditor) {
+                    monacoDiffEditor.layout();
+                    updateDiffDecorationsAndBadges();
+                }
+            }, 50);
+        }
+
+        function updateDiffDecorationsAndBadges() {
+            if (!monacoDiffEditor) return;
+            const changes = monacoDiffEditor.getLineChanges() || [];
+            const badge = document.getElementById('diffChangeBadge');
+            if (badge) {
+                badge.textContent = `${changes.length} Change${changes.length === 1 ? '' : 's'}`;
+                badge.style.color = changes.length > 0 ? '#58a6ff' : '#3fb950';
+            }
+
+            const origEditor = monacoDiffEditor.getOriginalEditor();
+            const modEditor = monacoDiffEditor.getModifiedEditor();
+            if (!origEditor || !modEditor) return;
+
+            // Glyph margin + button decorations
+            const leftDecs = [];
+            const rightDecs = [];
+
+            changes.forEach((c, idx) => {
+                const origLine = c.originalStartLineNumber > 0 ? c.originalStartLineNumber : (c.originalEndLineNumber > 0 ? c.originalEndLineNumber : 1);
+                const modLine = c.modifiedStartLineNumber > 0 ? c.modifiedStartLineNumber : (c.modifiedEndLineNumber > 0 ? c.modifiedEndLineNumber : 1);
+
+                leftDecs.push({
+                    range: new monaco.Range(origLine, 1, origLine, 1),
+                    options: {
+                        isWholeLine: true,
+                        glyphMarginClassName: 'diff-glyph-merge-btn',
+                        glyphMarginHoverMessage: { value: `**➕ Merge Change #${idx + 1}** into Working File\n(คลิกเพื่อ Merge บล็อกนี้เข้าช่องการทำงาน)` }
+                    }
+                });
+
+                rightDecs.push({
+                    range: new monaco.Range(modLine, 1, modLine, 1),
+                    options: {
+                        isWholeLine: true,
+                        glyphMarginClassName: 'diff-glyph-merge-btn',
+                        glyphMarginHoverMessage: { value: `**➕ Merge Change #${idx + 1}** into Working File\n(คลิกเพื่อ Merge บล็อกนี้เข้าช่องการทำงาน)` }
+                    }
+                });
+            });
+
+            if (leftDecorationsCollection) leftDecorationsCollection.clear();
+            leftDecorationsCollection = origEditor.createDecorationsCollection(leftDecs);
+
+            if (rightDecorationsCollection) rightDecorationsCollection.clear();
+            rightDecorationsCollection = modEditor.createDecorationsCollection(rightDecs);
+        }
+
+        function setupDiffEditorListeners() {
+            if (diffEditorListenersAttached || !monacoDiffEditor) return;
+            diffEditorListenersAttached = true;
+
+            const origEditor = monacoDiffEditor.getOriginalEditor();
+            const modEditor = monacoDiffEditor.getModifiedEditor();
+
+            origEditor.onMouseDown((e) => {
+                if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN ||
+                    e.target.type === monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS) {
+                    const line = e.target.position ? e.target.position.lineNumber : 0;
+                    handleGutterMergeClick(line, 'left');
+                }
+            });
+
+            modEditor.onMouseDown((e) => {
+                if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN ||
+                    e.target.type === monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS) {
+                    const line = e.target.position ? e.target.position.lineNumber : 0;
+                    handleGutterMergeClick(line, 'right');
+                }
+            });
+        }
+
+        function handleGutterMergeClick(lineNumber, side) {
+            if (!monacoDiffEditor) return;
+            const changes = monacoDiffEditor.getLineChanges() || [];
+            if (!changes.length) return;
+
+            let change = null;
+            if (side === 'left') {
+                change = changes.find(c => {
+                    const start = c.originalStartLineNumber || 1;
+                    const end = c.originalEndLineNumber || start;
+                    return lineNumber >= start && lineNumber <= end;
+                });
+            } else {
+                change = changes.find(c => {
+                    const start = c.modifiedStartLineNumber || 1;
+                    const end = c.modifiedEndLineNumber || start;
+                    return lineNumber >= start && lineNumber <= end;
+                });
+            }
+
+            if (!change && changes.length > 0) {
+                change = changes.reduce((prev, curr) => {
+                    const prevLine = side === 'left' ? prev.originalStartLineNumber : prev.modifiedStartLineNumber;
+                    const currLine = side === 'left' ? curr.originalStartLineNumber : curr.modifiedStartLineNumber;
+                    return Math.abs(currLine - lineNumber) < Math.abs(prevLine - lineNumber) ? curr : prev;
+                });
+            }
+
+            if (change) {
+                applyDiffHunk(change);
+            }
+        }
+
+        function applyDiffHunk(change) {
+            if (!monacoDiffEditor || !change) return;
+            const model = monacoDiffEditor.getModel();
+            if (!model || !model.original || !model.modified) return;
+
+            const fromModel = isSidesSwapped ? model.original : model.modified; // Compare
+            const toModel   = isSidesSwapped ? model.modified : model.original; // Working
+
+            const fromStart = isSidesSwapped ? change.originalStartLineNumber : change.modifiedStartLineNumber;
+            const fromEnd   = isSidesSwapped ? change.originalEndLineNumber   : change.modifiedEndLineNumber;
+            const toStart   = isSidesSwapped ? change.modifiedStartLineNumber : change.originalStartLineNumber;
+            const toEnd     = isSidesSwapped ? change.modifiedEndLineNumber   : change.originalEndLineNumber;
+
+            // Case 1: Pure deletion in Compare -> lines exist in Working, but do not exist in Compare
+            if (fromEnd === 0) {
+                let range;
+                const totalLines = toModel.getLineCount();
+                if (toEnd < totalLines) {
+                    range = new monaco.Range(toStart, 1, toEnd + 1, 1);
+                } else if (toStart > 1) {
+                    range = new monaco.Range(toStart - 1, toModel.getLineMaxColumn(toStart - 1), toEnd, toModel.getLineMaxColumn(toEnd));
+                } else {
+                    range = new monaco.Range(1, 1, toEnd, toModel.getLineMaxColumn(toEnd));
+                }
+                toModel.pushEditOperations([], [{ range: range, text: '' }], () => null);
+                return;
+            }
+
+            // Get text from Compare
+            const fromText = fromModel.getValueInRange({
+                startLineNumber: fromStart,
+                startColumn: 1,
+                endLineNumber: fromEnd,
+                endColumn: fromModel.getLineMaxColumn(fromEnd)
+            });
+
+            // Case 2: Pure insertion in Compare -> lines in Compare exist, but not in Working
+            if (toEnd === 0) {
+                let range, insertText;
+                if (toStart === 0) {
+                    range = new monaco.Range(1, 1, 1, 1);
+                    insertText = fromText + '\n';
+                } else {
+                    const maxCol = toModel.getLineMaxColumn(toStart);
+                    range = new monaco.Range(toStart, maxCol, toStart, maxCol);
+                    insertText = '\n' + fromText;
+                }
+                toModel.pushEditOperations([], [{ range: range, text: insertText }], () => null);
+                return;
+            }
+
+            // Case 3: Modification / Replacement
+            const range = new monaco.Range(
+                toStart,
+                1,
+                toEnd,
+                toModel.getLineMaxColumn(toEnd)
+            );
+            toModel.pushEditOperations([], [{ range: range, text: fromText }], () => null);
+        }
+
+        function nextDiffChange() {
+            if (!monacoDiffEditor) return;
+            const changes = monacoDiffEditor.getLineChanges() || [];
+            if (!changes.length) return;
+            activeDiffIndex = (activeDiffIndex + 1) % changes.length;
+            goToDiffChange(changes[activeDiffIndex]);
+        }
+
+        function prevDiffChange() {
+            if (!monacoDiffEditor) return;
+            const changes = monacoDiffEditor.getLineChanges() || [];
+            if (!changes.length) return;
+            activeDiffIndex = (activeDiffIndex - 1 + changes.length) % changes.length;
+            goToDiffChange(changes[activeDiffIndex]);
+        }
+
+        function goToDiffChange(change) {
+            if (!change || !monacoDiffEditor) return;
+            const origEditor = monacoDiffEditor.getOriginalEditor();
+            const modEditor = monacoDiffEditor.getModifiedEditor();
+            const origLine = change.originalStartLineNumber > 0 ? change.originalStartLineNumber : 1;
+            const modLine = change.modifiedStartLineNumber > 0 ? change.modifiedStartLineNumber : 1;
+            origEditor.revealLineInCenter(origLine);
+            modEditor.revealLineInCenter(modLine);
+            origEditor.setPosition({ lineNumber: origLine, column: 1 });
+            modEditor.setPosition({ lineNumber: modLine, column: 1 });
+        }
+
+        function mergeCurrentDiffHunk() {
+            if (!monacoDiffEditor) return;
+            const changes = monacoDiffEditor.getLineChanges() || [];
+            if (!changes.length) {
+                alert("ไม่มีส่วนต่างที่ต้อง Merge (No differences to merge)");
+                return;
+            }
+            if (activeDiffIndex >= changes.length) activeDiffIndex = 0;
+            applyDiffHunk(changes[activeDiffIndex]);
+        }
+
+        function mergeAllDiffHunks() {
+            if (!monacoDiffEditor) return;
+            const changes = monacoDiffEditor.getLineChanges() || [];
+            if (!changes.length) {
+                alert("ไม่มีส่วนต่างที่ต้อง Merge (No differences to merge)");
+                return;
+            }
+            if (!confirm(`ต้องการ Merge การเปลี่ยนแปลงทั้งหมด (${changes.length} รายการ) จากตัว Compare เข้าสู่ช่องการทำงานใช่หรือไม่?`)) {
+                return;
+            }
+            const model = monacoDiffEditor.getModel();
+            if (model && model.original && model.modified) {
+                const fromModel = isSidesSwapped ? model.original : model.modified;
+                const toModel   = isSidesSwapped ? model.modified : model.original;
+                const fullText  = fromModel.getValue();
+                const totalLines = toModel.getLineCount();
+                const maxCol    = toModel.getLineMaxColumn(totalLines);
+                toModel.pushEditOperations([], [{
+                    range: new monaco.Range(1, 1, totalLines, maxCol),
+                    text: fullText
+                }], () => null);
+            }
+        }
+
+        function loadCompareFromFile(event) {
+            const file = event.target.files && event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const content = e.target.result;
+                if (monacoDiffEditor) {
+                    const model = monacoDiffEditor.getModel();
+                    if (model) {
+                        const compareModel = isSidesSwapped ? model.original : model.modified;
+                        if (compareModel) {
+                            compareModel.setValue(content);
+                        }
+                    }
+                }
+                const currentTab = plsqlTabs.find(t => t.id === activePlsqlTabId);
+                if (currentTab) {
+                    currentTab.compareCode = content;
+                }
+            };
+            reader.readAsText(file);
+            event.target.value = '';
+        }
+
         async function compilePLSQL() {
+            if (isDiffMode && monacoDiffEditor) {
+                const currentTab = plsqlTabs.find(t => t.id === activePlsqlTabId);
+                if (currentTab) {
+                    const model = monacoDiffEditor.getModel();
+                    if (model) {
+                        const workingModel = isSidesSwapped ? model.modified : model.original;
+                        if (workingModel) {
+                            currentTab.code = workingModel.getValue();
+                            if (mainMonacoEditor) mainMonacoEditor.setValue(currentTab.code);
+                        }
+                    }
+                }
+            }
             if (!mainMonacoEditor) return;
             const code = mainMonacoEditor.getValue().trim();
             const consoleBox = document.getElementById('compileConsole');
