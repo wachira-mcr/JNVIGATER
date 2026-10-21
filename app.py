@@ -1579,16 +1579,19 @@ def _backup_old_source(cursor, alias, obj_name, obj_type):
     if not os.path.isdir(os.path.join(PLSQL_BACKUP_REPO, ".git")):
         return f"Backup: {path} (ยังไม่ได้ push — โฟลเดอร์ไม่ใช่ git clone)"
     git = lambda *a: subprocess.run(["git", "-c", "user.name=JNavigator Auto", "-c", "user.email=auto@jnavigator.local", *a],
-                                    cwd=PLSQL_BACKUP_REPO, capture_output=True, text=True, timeout=60)
+                                    cwd=PLSQL_BACKUP_REPO, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     git("pull", "--rebase", "--autostash")
     git("add", rel)
     commit = git("commit", "-m", f"Backup {alias} {obj_name} {obj_type} before compile {ts:%Y-%m-%d %H:%M:%S}")
     if commit.returncode != 0:
-        return f"Backup: {path} ⚠️ commit ไม่ผ่าน: {(commit.stderr or commit.stdout).strip()[-200:]}"
+        err_msg = (commit.stderr or commit.stdout or "commit failed").strip()
+        return f"Backup: {path} ⚠️ commit ไม่ผ่าน: {err_msg[-200:]}"
     push = git("push")
-    sha = git("rev-parse", "--short", "HEAD").stdout.strip()
+    sha_proc = git("rev-parse", "--short", "HEAD")
+    sha = (sha_proc.stdout or "").strip()
     if push.returncode != 0:
-        return f"Backup: {path} (commit {sha}) ⚠️ push ไม่ผ่าน: {push.stderr.strip()[-200:]}"
+        err_msg = (push.stderr or push.stdout or "push failed").strip()
+        return f"Backup: {path} (commit {sha}) ⚠️ push ไม่ผ่าน: {err_msg[-200:]}"
     return f"Backup: {path} (pushed {sha})"
 
 @app.route("/api/plsql/compile", methods=["POST"])
@@ -5530,7 +5533,7 @@ HTML_TEMPLATE = r"""
                     
                     
                     actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #0284c7, #0369a1);" onclick="downloadOracleReport('${(r.source_file_path || '').replace(/'/g, "\\'")}', '${safeProgShort}', '${basePath}', '${safeUserProgName}')" title="Download Oracle Report (.rdf) from Server">📥 RDF</button>`);
-                    actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #d946ef, #a21caf);" onclick="triggerUploadRdf('${basePath}')" title="Upload and Backup RDF">📤 RDF</button>`);
+                    actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #d946ef, #a21caf);" onclick="triggerUploadRdf('${basePath}', '${(r.source_file_path || '').replace(/'/g, "\\'")}')" title="Upload and Backup RDF">📤 RDF</button>`);
                     actions.push(`<button class="btn btn-primary" style="padding:4px 8px; font-size:0.75rem; background:linear-gradient(135deg, #7c3aed, #6d28d9);" onclick="openSftpExplorer('${searchPath}', '${r.program_short_name || ''}')" title="Browse Server Files (SFTP)">📂 SFTP</button>`);
                 }
                 
@@ -7426,6 +7429,7 @@ HTML_TEMPLATE = r"""
 
         let currentUploadTemplateCode = '';
         let currentUploadRdfBasePath = '';
+        let currentUploadRdfSourcePath = '';
         
         function triggerUploadRtf(templateCode) {
             if (!templateCode) return;
@@ -7470,9 +7474,10 @@ HTML_TEMPLATE = r"""
         
         let currentUploadBothLangs = false;
         
-        function triggerUploadRdf(basePath) {
+        function triggerUploadRdf(basePath, sourcePath) {
             if (!basePath) return;
             currentUploadRdfBasePath = basePath;
+            currentUploadRdfSourcePath = sourcePath || '';
             
             const sessionSelect = document.getElementById('dbSessionSelect');
             const siteName = sessionSelect && sessionSelect.selectedIndex >= 0 ? sessionSelect.options[sessionSelect.selectedIndex].text.toUpperCase() : '';
@@ -7498,6 +7503,7 @@ HTML_TEMPLATE = r"""
             const formData = new FormData();
             formData.append('file', file);
             formData.append('base_path', currentUploadRdfBasePath);
+            formData.append('source_file_path', currentUploadRdfSourcePath);
             formData.append('upload_both_langs', currentUploadBothLangs ? 'true' : 'false');
             
             event.target.value = ''; // Reset input
@@ -8571,7 +8577,11 @@ SQLEOF
             run(f"echo '===JNAV==='; echo ${app_short}_TOP")
             if exec_method == 'P':
                 base_exec = exec_file.split('/')[-1] if '/' in exec_file else exec_file
-                find_cmd = f"f=$(find $APPL_TOP -type f -name '{base_exec}.rdf' -o -name '{base_exec.upper()}.rdf' -o -name '{base_exec.lower()}.rdf' 2>/dev/null | head -n 1); if [ -n \"$f\" ]; then cp \"$f\" {remote_tmp}/; else echo 'RDF not found'; fi"
+                find_cmd = (
+                    f"f=$(find ${app_short}_TOP -type f -name '{base_exec}.rdf' -o -name '{base_exec.upper()}.rdf' -o -name '{base_exec.lower()}.rdf' 2>/dev/null | head -n 1); "
+                    f"if [ -z \"$f\" ]; then f=$(find $XXPL_TOP $XXCUST_TOP $CUST_TOP -type f -name '{base_exec}.rdf' -o -name '{base_exec.upper()}.rdf' -o -name '{base_exec.lower()}.rdf' 2>/dev/null | head -n 1); fi; "
+                    f"if [ -n \"$f\" ]; then cp \"$f\" {remote_tmp}/; else echo 'RDF not found'; fi"
+                )
                 run(find_cmd)
             elif exec_method == 'Q':
                 find_cmd = f"f=$(find $APPL_TOP -type f -name '{exec_file}.sql' -o -name '{exec_file.lower()}.sql' 2>/dev/null | head -n 1); if [ -n \"$f\" ]; then cp \"$f\" {remote_tmp}/; else echo 'SQL not found'; fi"
@@ -9318,6 +9328,8 @@ def api_sftp_download_oracle_report():
         dir_name = os.path.dirname(target_path) or "."
         candidate_remotes = [
             target_path,
+            target_path.replace('/reports/US/', '/reports/custom/US/'),
+            target_path.replace('/reports/custom/US/', '/reports/US/'),
             target_path.replace('/reports/US/custom/', '/reports/custom/US/'),
             target_path.replace('/reports/custom/US/', '/reports/US/custom/'),
             f"{dir_name}/{file_name}",
@@ -9326,10 +9338,12 @@ def api_sftp_download_oracle_report():
         ]
         if '/fs1/' in target_path:
             candidate_remotes.append(target_path.replace('/fs1/', '/fs2/'))
-            candidate_remotes.append(target_path.replace('/fs1/', '/fs2/').replace('/reports/US/custom/', '/reports/custom/US/'))
+            candidate_remotes.append(target_path.replace('/fs1/', '/fs2/').replace('/reports/US/', '/reports/custom/US/'))
+            candidate_remotes.append(target_path.replace('/fs1/', '/fs2/').replace('/reports/custom/US/', '/reports/US/'))
         elif '/fs2/' in target_path:
             candidate_remotes.append(target_path.replace('/fs2/', '/fs1/'))
-            candidate_remotes.append(target_path.replace('/fs2/', '/fs1/').replace('/reports/US/custom/', '/reports/custom/US/'))
+            candidate_remotes.append(target_path.replace('/fs2/', '/fs1/').replace('/reports/US/', '/reports/custom/US/'))
+            candidate_remotes.append(target_path.replace('/fs2/', '/fs1/').replace('/reports/custom/US/', '/reports/US/'))
             
         found_remote = None
         for cand in candidate_remotes:
@@ -9351,11 +9365,25 @@ def api_sftp_download_oracle_report():
             except Exception:
                 pass
 
-        # If still not found, execute dynamic find on server
+        # If still not found, search within base_path first, then custom tops only (never jump to other standard modules)
         if not found_remote:
-            find_cmd = f"[ -f ~/.bash_profile ] && . ~/.bash_profile >/dev/null 2>&1; [ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1; find $APPL_TOP /TST /UAT /PROD /u01 /u02 /u03 /apps /oracle /d01 /d02 -type f -name '{file_name}' 2>/dev/null | head -n 1"
+            search_base = base_path if base_path else dir_name
+            find_cmd = (
+                f"[ -f ~/.bash_profile ] && . ~/.bash_profile >/dev/null 2>&1; "
+                f"[ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1; "
+                f"find {search_base} -type f -name '{file_name}' 2>/dev/null | head -n 1"
+            )
             stdin, stdout, stderr = ssh.exec_command(find_cmd)
             found = stdout.read().decode('utf-8').strip()
+            
+            if not found and search_base != "$APPL_TOP":
+                find_custom_cmd = (
+                    f"[ -f ~/.bash_profile ] && . ~/.bash_profile >/dev/null 2>&1; "
+                    f"[ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1; "
+                    f"find $XXPL_TOP $XXCUST_TOP $CUST_TOP -type f -name '{file_name}' 2>/dev/null | head -n 1"
+                )
+                stdin, stdout, stderr = ssh.exec_command(find_custom_cmd)
+                found = stdout.read().decode('utf-8').strip()
             if found:
                 try:
                     sftp.stat(found)
@@ -9540,27 +9568,55 @@ def api_sftp_upload_rdf():
             
         upload_both_langs = request.form.get("upload_both_langs", "false").lower() == "true"
         
-        remote_path = f"{base_path}/reports/US" if base_path else "."
-        if '$' in remote_path:
-            resolve_cmd = f"[ -f ~/.bash_profile ] && . ~/.bash_profile >/dev/null 2>&1; [ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1; echo '===JNAV==='; echo {remote_path}"
-            stdin, stdout, stderr = ssh.exec_command(resolve_cmd)
-            full_out = stdout.read().decode('utf-8').strip()
-            
-            if '===JNAV===' in full_out:
-                eval_path = full_out.split('===JNAV===')[-1].strip()
-            else:
-                eval_path = full_out
-                
-            # If the file exists already somewhere in the app filesystem, find its exact directory
-            find_cmd = f"[ -f ~/.bash_profile ] && . ~/.bash_profile >/dev/null 2>&1; [ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1; find $APPL_TOP /TST /UAT /PROD /u01 /u02 /u03 /apps /oracle /d01 /d02 -type f -name '{filename}' 2>/dev/null | head -n 1"
-            stdin, stdout, stderr = ssh.exec_command(find_cmd)
+        # Scoped search logic:
+        # Priority 1: Search strictly under base_path (the Concurrent Program's registered module, e.g. $GL_TOP)
+        # Priority 2: If not found, check custom application directories only ($XXPL_TOP, $XXCUST_TOP, $CUST_TOP)
+        # Priority 3: Fallback to base_path/reports/custom/US (if dir exists) or base_path/reports/US
+        # NEVER do a blind global search across other standard EBS modules (e.g. never pick up $AR_TOP for a GL report)!
+        
+        target_base = base_path if base_path else "$APPL_TOP"
+        find_path = ""
+        
+        # 1. Search under the program's specific base_path first
+        find_base_cmd = (
+            f"[ -f ~/.bash_profile ] && . ~/.bash_profile >/dev/null 2>&1; "
+            f"[ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1; "
+            f"find {target_base} -type f -name '{filename}' 2>/dev/null | head -n 1"
+        )
+        stdin, stdout, stderr = ssh.exec_command(find_base_cmd)
+        find_path = stdout.read().decode('utf-8').strip()
+        
+        # 2. If not found in base_path, check custom application directories only (never jump to other standard modules)
+        if not find_path and target_base != "$APPL_TOP":
+            find_custom_cmd = (
+                f"[ -f ~/.bash_profile ] && . ~/.bash_profile >/dev/null 2>&1; "
+                f"[ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1; "
+                f"find $XXPL_TOP $XXCUST_TOP $CUST_TOP -type f -name '{filename}' 2>/dev/null | head -n 1"
+            )
+            stdin, stdout, stderr = ssh.exec_command(find_custom_cmd)
             find_path = stdout.read().decode('utf-8').strip()
-            if find_path:
-                remote_path = os.path.dirname(find_path)
-            elif eval_path and eval_path != remote_path and not eval_path.startswith('/reports/US'):
-                remote_path = eval_path
-            else:
-                remote_path = eval_path or remote_path
+            
+        if find_path:
+            remote_path = os.path.dirname(find_path)
+        else:
+            # 3. If file does not exist yet, determine standard folder under base_path (check custom/US first, then US)
+            dir_check_cmd = (
+                f"[ -f ~/.bash_profile ] && . ~/.bash_profile >/dev/null 2>&1; "
+                f"[ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1; "
+                f"if [ -d \"{target_base}/reports/custom/US\" ]; then echo \"{target_base}/reports/custom/US\"; "
+                f"elif [ -d \"{target_base}/reports/US\" ]; then echo \"{target_base}/reports/US\"; "
+                f"elif [ -d \"{target_base}/reports\" ]; then echo \"{target_base}/reports\"; "
+                f"else echo \"{target_base}\"; fi"
+            )
+            stdin, stdout, stderr = ssh.exec_command(dir_check_cmd)
+            eval_dir = stdout.read().decode('utf-8').strip()
+            
+            if '$' in eval_dir:
+                resolve_cmd = f"[ -f ~/.bash_profile ] && . ~/.bash_profile >/dev/null 2>&1; [ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1; echo {eval_dir}"
+                stdin, stdout, stderr = ssh.exec_command(resolve_cmd)
+                eval_dir = stdout.read().decode('utf-8').strip()
+                
+            remote_path = eval_dir or f"{target_base}/reports/US"
                 
         resolved_paths = set([remote_path])
         if upload_both_langs:
