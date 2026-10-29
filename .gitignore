@@ -11,3 +11,4 @@ output/
 saved_profiles.json
 sftp_profiles.json
 app_backup*.py
+activity_log.jsonl

@@ -59,6 +59,83 @@ def add_header(response):
 active_session_key = None
 db_sessions = {} # { "ALIAS_USER": conn_info }
 
+@app.before_request
+def sync_session_from_header():
+    # The page's selected DB session wins over the server-global one, which goes stale
+    # (app restart auto-connects the last-used alias, other windows, etc.) and made Compile hit the wrong DB.
+    global active_session_key
+    key = request.headers.get("X-DB-Session")
+    if not key or not request.path.startswith("/api/") or request.path in ("/api/sessions", "/api/connect"):
+        return
+    if key not in db_sessions:
+        return jsonify({"success": False, "stale_session": True,
+                        "error": f"Session {key} ไม่ได้เชื่อมต่ออยู่แล้ว — เลือก DB Session ใหม่ที่มุมขวาบน"}), 409
+    active_session_key = key
+
+# Activity log: every compile / upload through JNavigator, all sites, one file (JSON lines)
+if getattr(sys, 'frozen', False):
+    ACTIVITY_LOG_FILE = os.path.join(os.path.dirname(sys.executable), "activity_log.jsonl")
+else:
+    ACTIVITY_LOG_FILE = os.path.join(os.path.dirname(__file__), "activity_log.jsonl")
+_activity_lock = threading.Lock()
+LOGGED_ROUTES = {
+    "/api/plsql/compile": "COMPILE",
+    "/api/upload_template": "UPLOAD RTF",
+    "/api/sftp/upload_rdf": "UPLOAD RDF",
+    "/api/fndload/upload_folder": "UPLOAD FNDLOAD",
+}
+
+@app.after_request
+def log_activity(response):
+    action = LOGGED_ROUTES.get(request.path)
+    if not action or request.method != "POST":
+        return response
+    try:
+        j = response.get_json(silent=True) or {}
+        if j.get("need_confirm") or j.get("error") == "NOT_CONFIGURED" or response.status_code == 409:
+            return response  # not an attempt yet (waiting for confirm / no SFTP creds / stale session)
+        body = request.get_json(silent=True) or {}
+        form = request.form
+        if request.path == "/api/plsql/compile":
+            obj = f"{body.get('type', '')} {body.get('name', '')}".strip()
+        elif request.path == "/api/upload_template":
+            obj = form.get("template_code", "")
+        elif request.path == "/api/fndload/upload_folder":
+            obj = ", ".join(f.filename for f in request.files.getlist("files") if f.filename)[:200]
+        else:
+            fl = request.files.get("file")
+            obj = fl.filename if fl else ""
+        sess = db_sessions.get(form.get("target_profile") or active_session_key) or {}
+        alias = sess.get("alias") or (form.get("target_profile") or "UNKNOWN").split("@")[-1]
+        entry = {
+            "time": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "site": alias.split("_")[0].upper(),
+            "db": alias,
+            "user": sess.get("user", ""),
+            "action": action,
+            "object": obj,
+            "status": "SUCCESS" if j.get("success") else "FAILED",
+            "detail": str(j.get("message") or j.get("error") or "")[:500],
+        }
+        with _activity_lock, open(ACTIVITY_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"Activity log notice: {e}")
+    return response
+
+@app.route("/api/activity_log", methods=["GET"])
+def get_activity_log():
+    rows = []
+    if os.path.exists(ACTIVITY_LOG_FILE):
+        with open(ACTIVITY_LOG_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    pass
+    rows.reverse()  # newest first
+    return jsonify({"success": True, "items": rows[:2000], "sites": sorted({r["site"] for r in rows})})
+
 if getattr(sys, 'frozen', False):
     SAVED_PROFILES_FILE = os.path.join(os.path.dirname(sys.executable), "saved_profiles.json")
 else:
@@ -3279,6 +3356,9 @@ HTML_TEMPLATE = r"""
                 <div class="mode-tab" id="tabAiBtn" onclick="switchTab('ai')">
                     <span>AI Assistant</span>
                 </div>
+                <div class="mode-tab" id="tabLogBtn" onclick="switchTab('log')">
+                    <span>Activity Log</span>
+                </div>
             </div>
 
             <!-- TAB 1: Multi-Tab SQL Workbench -->
@@ -3476,6 +3556,26 @@ HTML_TEMPLATE = r"""
                             </div>
                         </div>
                     </div>
+                </div>
+            </div>
+
+            <!-- TAB 7: Compile / Upload Activity Log (all sites) -->
+            <div class="tab-view" id="tabLogView">
+                <div class="conc-layout">
+                    <div class="conc-toolbar" style="display:flex; gap: 10px; align-items:center;">
+                        <select id="logSiteSelect" onchange="renderActivityLog()" style="padding: 6px; border-radius: 4px; border: 1px solid var(--panel-border); background: var(--bg-dark); color: var(--text-main);">
+                            <option value="">All Sites</option>
+                        </select>
+                        <select id="logActionSelect" onchange="renderActivityLog()" style="padding: 6px; border-radius: 4px; border: 1px solid var(--panel-border); background: var(--bg-dark); color: var(--text-main);">
+                            <option value="">All Actions</option>
+                            <option value="COMPILE">Compile</option>
+                            <option value="UPLOAD">Upload</option>
+                        </select>
+                        <input type="text" id="logSearchInput" placeholder="ค้นหา object / DB / user..." oninput="renderActivityLog()" style="width: 260px; padding: 6px; border-radius: 4px; border: 1px solid var(--panel-border); background: var(--bg-dark); color: var(--text-main);">
+                        <button class="btn btn-secondary" onclick="loadActivityLog()">🔄 Refresh</button>
+                        <span id="logStats" style="font-size:0.78rem; color:var(--text-muted);"></span>
+                    </div>
+                    <div class="table-wrapper" id="logTableWrapper" style="flex: 1; overflow: auto;"></div>
                 </div>
             </div>
 
@@ -3895,6 +3995,53 @@ HTML_TEMPLATE = r"""
     </div>
 
     <script>
+        // Send the DB session selected in the header with every API call so the server never compiles/uploads to a stale "active" DB
+        const _origFetch = window.fetch.bind(window);
+        window.fetch = (url, opts = {}) => {
+            const sel = document.getElementById('dbSessionSelect');
+            if (typeof url === 'string' && url.startsWith('/api/') && sel && sel.value) {
+                opts = Object.assign({}, opts, { headers: Object.assign({}, opts.headers, { 'X-DB-Session': sel.value }) });
+            }
+            return _origFetch(url, opts).then(r => {
+                if (r.status === 409) r.clone().json().then(j => { if (j.stale_session) loadSessionsList(); }).catch(() => {});
+                return r;
+            });
+        };
+        window.addEventListener('focus', () => loadSessionsList());
+
+        let activityLogItems = [];
+        async function loadActivityLog() {
+            const res = await fetch('/api/activity_log');
+            const data = await res.json();
+            if (!data.success) return;
+            activityLogItems = data.items;
+            const siteSel = document.getElementById('logSiteSelect');
+            const cur = siteSel.value;
+            siteSel.innerHTML = '<option value="">All Sites</option>' + data.sites.map(s => `<option value="${s}">${s}</option>`).join('');
+            siteSel.value = cur;
+            renderActivityLog();
+        }
+        function renderActivityLog() {
+            const site = document.getElementById('logSiteSelect').value;
+            const action = document.getElementById('logActionSelect').value;
+            const q = document.getElementById('logSearchInput').value.trim().toLowerCase();
+            const rows = activityLogItems.filter(r =>
+                (!site || r.site === site) && (!action || r.action.startsWith(action)) &&
+                (!q || (r.object + ' ' + r.db + ' ' + r.user).toLowerCase().includes(q)));
+            document.getElementById('logStats').textContent = `${rows.length} / ${activityLogItems.length} รายการ`;
+            const wrapper = document.getElementById('logTableWrapper');
+            if (!rows.length) {
+                wrapper.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-muted);">ยังไม่มีประวัติ Compile / Upload</div>';
+                return;
+            }
+            wrapper.innerHTML = `<table class="data-grid"><thead><tr><th>Time</th><th>Site</th><th>DB</th><th>User</th><th>Action</th><th>Object / File</th><th>Status</th><th>Detail</th></tr></thead><tbody>` +
+                rows.map(r => `<tr>
+                    <td>${escapeHtml(r.time)}</td><td>${escapeHtml(r.site)}</td><td>${escapeHtml(r.db)}</td><td>${escapeHtml(r.user)}</td>
+                    <td>${escapeHtml(r.action)}</td><td>${escapeHtml(r.object)}</td>
+                    <td style="color:${r.status === 'SUCCESS' ? '#4ec9b0' : '#f14c4c'}; font-weight:600;">${r.status}</td>
+                    <td style="white-space:pre-wrap; max-width:520px;">${escapeHtml(r.detail)}</td></tr>`).join('') + '</tbody></table>';
+        }
+
         let tnsData = [];
         let selectedTns = null;
         let activeTypeFilter = 'ALL';
@@ -4504,7 +4651,8 @@ HTML_TEMPLATE = r"""
                 'conc': ['tabConcBtn', 'tabConcView'],
                 'desc': ['tabDescBtn', 'tabDescView'],
                 'flex': ['tabFlexBtn', 'tabFlexView'],
-                'ai': ['tabAiBtn', 'tabAiView']
+                'ai': ['tabAiBtn', 'tabAiView'],
+                'log': ['tabLogBtn', 'tabLogView']
             };
 
             const target = tabMap[tabName] || tabMap['sql'];
@@ -4514,7 +4662,9 @@ HTML_TEMPLATE = r"""
             if (btnEl) btnEl.classList.add('active');
             if (viewEl) viewEl.classList.add('active');
 
-            if (tabName === 'sql' && typeof sqlMonacoEditor !== 'undefined' && sqlMonacoEditor) {
+            if (tabName === 'log') {
+                loadActivityLog();
+            } else if (tabName === 'sql' && typeof sqlMonacoEditor !== 'undefined' && sqlMonacoEditor) {
                 setTimeout(() => sqlMonacoEditor.layout(), 100);
             } else if (tabName === 'plsql' && typeof mainMonacoEditor !== 'undefined' && mainMonacoEditor) {
                 setTimeout(() => {
