@@ -1644,12 +1644,17 @@ def _backup_old_source(cursor, alias, obj_name, obj_type):
     lines = [r[0] for r in cursor.fetchall()]
     if not lines:
         return "ไม่มี source เดิม (object ใหม่) — ไม่ได้ backup"
+    return _save_backup(cursor, alias, obj_name, obj_type, "CREATE OR REPLACE " + "".join(lines).rstrip() + "\n/\n")
+
+def _save_backup(cursor, alias, obj_name, obj_type, ddl):
+    """Write ddl to <repo>/<ALIAS>/<folder>/_before_compile/ and commit+push. Raises if the file can't be written."""
+    import os, subprocess, datetime
     ts = datetime.datetime.now()
     rel = os.path.join(_backup_rel_dir(cursor, alias, obj_name, obj_type), "_before_compile", f"{obj_name}_{obj_type.replace(' ', '_')}_{ts:%Y%m%d_%H%M%S}.sql")
     path = os.path.join(PLSQL_BACKUP_REPO, rel)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "x", encoding="utf-8", newline="") as f:  # "x" = never overwrite an old backup
-        f.write("CREATE OR REPLACE " + "".join(lines).rstrip() + "\n/\n")
+        f.write(ddl)
     if not os.path.getsize(path):
         raise Exception(f"ไฟล์ backup ว่าง: {path}")
 
@@ -3846,7 +3851,7 @@ HTML_TEMPLATE = r"""
                     </div>
                     <div>
                         <label style="font-size:0.76rem; font-weight:500; color:var(--warning); display:block; margin-bottom:4px;">Target DB Site (Clone ไปยังไซต์ใด):</label>
-                        <select id="fndTgtDb" style="width:100%; font-weight:600; border:1px solid var(--panel-border); color:var(--warning); background:var(--bg-dark);"></select>
+                        <select id="fndTgtDb" style="width:100%; font-weight:600; border:1px solid var(--panel-border); color:var(--warning); background:var(--bg-dark);" onchange="const b = document.getElementById('fndObjCheck'); if (b) b.innerHTML = '';"></select>
                     </div>
                 </div>
 
@@ -6353,28 +6358,37 @@ HTML_TEMPLATE = r"""
 
                 const logHtml = (data.log || []).map(l => {
                     let color = '#94a3b8';
-                    if (l.startsWith('[ERR]') || l.startsWith('[FATAL]') || l.toLowerCase().includes('error') || l.toLowerCase().includes('failed')) color = '#fca5a5';
-                    else if (l.startsWith('  >>') || l.startsWith('Uploaded:') || l.includes('Complete') || l.includes('success')) color = '#6ee7b7';
-                    else if (l.startsWith('$') || l.startsWith('---')) color = '#38bdf8';
-                    return `<div style="font-family:monospace; font-size:0.75rem; color:${color}; line-height:1.4;">${escapeHtml(l)}</div>`;
+                    if (l.startsWith('[ERR]') || l.startsWith('[FATAL]') || l.includes('✗') || l.toLowerCase().includes('error') || l.toLowerCase().includes('failed')) color = '#fca5a5';
+                    else if (l.includes('✓') || l.includes('🛡️')) color = '#6ee7b7';
+                    else if (l.startsWith('$')) color = '#64748b';
+                    else if (l.startsWith('---') || l.startsWith('\\n---') || l.startsWith('===') || l.startsWith('\\n===')) color = '#38bdf8';
+                    return `<div style="font-family:monospace; font-size:0.72rem; color:${color}; line-height:1.4; white-space:pre-wrap;">${escapeHtml(l)}</div>`;
                 }).join('');
 
                 btnSubmit.disabled = false;
                 btnSubmit.textContent = '🚀 อัปโหลดเข้า Server';
 
                 if (data.success) {
+                    const results = data.results || [];
+                    const failed = results.filter(r => !r.ok).length;
+                    const steps = [...new Set(results.map(r => r.step))];
+                    const summaryHtml = steps.map(s => `
+                        <div style="margin-top:6px; font-weight:600; color:#38bdf8;">${escapeHtml(s)}</div>` +
+                        results.filter(r => r.step === s).map(r => `
+                        <div style="padding-left:10px; color:${r.ok ? '#6ee7b7' : '#fca5a5'};">${r.ok ? '✓' : '✗'} <code>${escapeHtml(r.file)}</code>${r.note ? ` — <span style="color:#fca5a5;">${escapeHtml(r.note)}</span>` : ''}</div>`).join('')
+                    ).join('') || '<div style="color:var(--text-muted);">ไม่พบไฟล์ที่ต้อง Deploy (CON_/XML_/.rtf/.pks/.pkb/GROUP_)</div>';
+                    const ok = failed === 0;
                     statusMsg.innerHTML = `
-                        <div style="background:rgba(63, 185, 80, 0.12); border:1px solid rgba(63, 185, 80, 0.4); color:#3fb950; padding:12px; border-radius:6px;">
-                            <div style="font-weight:700; margin-bottom:6px; font-size:0.9rem;">✅ อัปโหลดและรันคำสั่งเข้า Server สำเร็จเรียบร้อย!</div>
-                            <div style="font-size:0.78rem; margin-bottom:8px; color:#cbd5e1;">Target Site: <b>${escapeHtml(targetSite)}</b> | โฟลเดอร์: <b>${escapeHtml(folderName)}</b></div>
-                            <details open style="font-size:0.76rem;">
-                                <summary style="cursor:pointer; color:#38bdf8; font-weight:600; margin-bottom:4px;">▼ ดู Log ผลการรันบน Server</summary>
-                                <div style="margin-top:6px; max-height:200px; overflow-y:auto; background:#0b1120; padding:10px; border-radius:4px; border:1px solid #1e293b;">
-                                    ${logHtml}
-                                </div>
+                        <div style="background:${ok ? 'rgba(63, 185, 80, 0.1)' : 'rgba(210, 153, 34, 0.12)'}; border:1px solid ${ok ? 'rgba(63, 185, 80, 0.3)' : 'rgba(210, 153, 34, 0.4)'}; color:${ok ? '#3fb950' : '#d29922'}; padding:12px; border-radius:6px;">
+                            <div style="font-weight:600; margin-bottom:4px;">${ok ? `อัปโหลดเข้า Server สำเร็จ! (${results.length} รายการ)` : `อัปโหลดเสร็จ แต่ไม่สำเร็จ ${failed} จาก ${results.length} รายการ`}</div>
+                            <div style="font-size:0.76rem; margin-bottom:6px; color:var(--text-muted);">Target Site: <b>${escapeHtml(targetSite)}</b> | โฟลเดอร์: <b>${escapeHtml(folderName)}</b></div>
+                            <div style="font-size:0.76rem; margin-bottom:8px;">${summaryHtml}</div>
+                            <details style="font-size:0.72rem;"><summary style="cursor:pointer; color:var(--text-muted);">ดู Log</summary>
+                                <div style="margin-top:6px; max-height:220px; overflow-y:auto; background:var(--bg-dark); padding:8px; border-radius:4px; border:1px solid var(--panel-border);">${logHtml}</div>
                             </details>
                         </div>`;
-                    showToast(`อัปโหลดและ Deploy โฟลเดอร์ ${folderName} สำเร็จ!`, 4000, 'success');
+                    if (ok) showToast(`อัปโหลดและ Deploy โฟลเดอร์ ${folderName} สำเร็จ!`, 4000, 'success');
+                    else showToast(`Deploy ไม่สำเร็จ ${failed} รายการ — ดูรายละเอียดในหน้าต่าง`, 5000, 'error');
                 } else if (data.error === 'NOT_CONFIGURED') {
                     statusMsg.innerHTML = `
                         <div style="background:rgba(210, 153, 34, 0.15); border:1px solid rgba(210, 153, 34, 0.4); color:#d29922; padding:12px; border-radius:6px;">
@@ -6503,6 +6517,11 @@ HTML_TEMPLATE = r"""
                 } else {
                     html += `<div style="color:var(--text-muted); font-size:0.76rem;">ไม่พบ PKG อื่นที่ถูกเรียกใช้ภายใน</div>`;
                 }
+                window._fndPkgMain = `${d.owner}.${d.name}`;
+                html += `<div style="border-top:1px dashed var(--panel-border); margin-top:8px; padding-top:8px;">
+                        <button class="btn btn-secondary" style="font-size:0.76rem; padding:4px 10px;" onclick="checkFndObjects()">🔍 ตรวจสอบ Table / View (ต้นทาง ↔ ปลายทาง)</button>
+                        <div id="fndObjCheck" style="margin-top:6px;"></div>
+                    </div>`;
                 box.innerHTML = html;
             } catch (e) {
                 box.innerHTML = `<span style="color:var(--warning);">ตรวจสอบ PKG ไม่ได้: ${escapeHtml(e.message)}</span>`;
@@ -6511,6 +6530,54 @@ HTML_TEMPLATE = r"""
 
         function getFndExtraPkgs() {
             return Array.from(document.querySelectorAll('#fndPkgDeps .fnd-dep-pkg:checked')).map(c => c.value);
+        }
+
+        async function checkFndObjects() {
+            const box = document.getElementById('fndObjCheck');
+            const src = document.getElementById('fndSrcDb').value;
+            const tgt = document.getElementById('fndTgtDb').value;
+            if (!box || !window._fndPkgMain) return;
+            if (!tgt || tgt === src) { box.innerHTML = '<span style="color:var(--warning);">กรุณาเลือก Target DB ที่ไม่ใช่ Source</span>'; return; }
+            box.innerHTML = `<span style="color:var(--text-muted);">⏳ กำลังเทียบ Table / View ระหว่าง ${escapeHtml(src)} ↔ ${escapeHtml(tgt)}...</span>`;
+            try {
+                const res = await fetch('/api/fndload/check_objects', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ src_profile: src, tgt_profile: tgt, pkgs: [window._fndPkgMain, ...getFndExtraPkgs()] })
+                });
+                const d = await res.json();
+                if (!d.success) { box.innerHTML = `<span style="color:var(--warning);">ตรวจสอบไม่ได้: ${escapeHtml(d.error || '')}</span>`; return; }
+                if (!d.objects.length) { box.innerHTML = '<span style="color:var(--text-muted);">ไม่พบ Table / View ที่ PKG เรียกใช้</span>'; return; }
+                const badge = { SAME: ['✅ เหมือนกัน', 'var(--success)'], MISSING: ['❌ ไม่มีในปลายทาง', '#f85149'], DIFF: ['⚠️ ต่างกัน', 'var(--warning)'] };
+                const row = o => {
+                    const [label, color] = badge[o.status];
+                    const val = escapeHtml(JSON.stringify({ owner: o.owner, name: o.name, type: o.type, synonym: o.synonym }));
+                    return `<div style="padding:2px 0;">
+                        <label style="display:flex; align-items:center; gap:6px; cursor:${o.status === 'SAME' ? 'default' : 'pointer'};">
+                            <input type="checkbox" class="fnd-sync-obj" value="${val}" ${o.status === 'SAME' ? 'disabled' : (o.standard ? '' : 'checked')}>
+                            <span style="font-size:0.7rem; color:var(--text-muted); min-width:34px;">${o.type}</span>
+                            <span>${escapeHtml(o.owner)}.${escapeHtml(o.name)}</span>
+                            <span style="font-size:0.72rem; color:${color};">${label}</span>
+                        </label>
+                        ${o.diffs.length ? `<div style="padding-left:46px; font-size:0.7rem; color:var(--text-muted);">${o.diffs.slice(0, 8).map(escapeHtml).join('<br>')}${o.diffs.length > 8 ? `<br>... อีก ${o.diffs.length - 8} รายการ` : ''}</div>` : ''}
+                    </div>`;
+                };
+                const custom = d.objects.filter(o => !o.standard), std = d.objects.filter(o => o.standard);
+                const notSame = arr => arr.filter(o => o.status !== 'SAME').length;
+                box.innerHTML = `
+                    <div style="margin-bottom:4px; color:var(--text-main);">พบ Table / View <b>${d.objects.length}</b> ตัว — ไม่ตรงกัน <b style="color:var(--warning);">${notSame(d.objects)}</b> ตัว. ติ๊กตัวที่ต้องการสร้างสคริปต์อัปโหลดไปปลายทาง:</div>
+                    <div style="max-height:180px; overflow-y:auto;">
+                        ${custom.map(row).join('') || '<div style="color:var(--text-muted);">ไม่มี Custom Table / View</div>'}
+                        ${std.length ? `<details style="margin-top:4px;"><summary style="cursor:pointer; color:var(--text-muted); font-size:0.74rem;">EBS Standard ${std.length} ตัว (ไม่ตรง ${notSame(std)}) — ไม่แนะนำให้ sync</summary>${std.map(row).join('')}</details>` : ''}
+                    </div>
+                    <div style="font-size:0.7rem; color:var(--text-muted); margin-top:4px;">ไม่มีในปลายทาง = CREATE TABLE / VIEW • ต่างกัน = ALTER TABLE ADD/MODIFY คอลัมน์ หรือ CREATE OR REPLACE VIEW (ไม่ลบคอลัมน์ที่มีเฉพาะปลายทาง, ไม่รวม Index)</div>`;
+            } catch (e) {
+                box.innerHTML = `<span style="color:var(--warning);">ตรวจสอบไม่ได้: ${escapeHtml(e.message)}</span>`;
+            }
+        }
+
+        function getFndSyncObjs() {
+            return Array.from(document.querySelectorAll('#fndObjCheck .fnd-sync-obj:checked')).map(c => JSON.parse(c.value));
         }
 
         function closeFndLoadModal() {
@@ -6560,7 +6627,8 @@ HTML_TEMPLATE = r"""
                         tgt_profile: tgtProfile,
                         output_dir: outDir,
                         folder_name: document.getElementById('fndProgName').value.trim(),
-                        extra_pkgs: getFndExtraPkgs()
+                        extra_pkgs: getFndExtraPkgs(),
+                        sync_objects: getFndSyncObjs()
                     })
                 });
                 const data = await res.json();
@@ -6572,9 +6640,10 @@ HTML_TEMPLATE = r"""
                     window._lastFndParams = {
                         program_name: prog, app_short_name: appShort,
                         ds_code: dsCode, tmpl_code: tmplCode,
-                        src_profile: srcProfile, output_dir: outDir,
+                        src_profile: srcProfile, tgt_profile: tgtProfile, output_dir: outDir,
                         folder_name: document.getElementById('fndProgName').value.trim(),
-                        extra_pkgs: getFndExtraPkgs()
+                        extra_pkgs: getFndExtraPkgs(),
+                        sync_objects: getFndSyncObjs()
                     };
                     statusMsg.innerHTML = `
                         <div style="background:rgba(63, 185, 80, 0.1); border:1px solid rgba(63, 185, 80, 0.3); color:#3fb950; padding:12px; border-radius:6px;">
@@ -8540,7 +8609,7 @@ TGT_JDBC="{tgt_jdbc}"
 echo "============================================================" | tee "$LOG"
 echo " UPLOAD (Direct File Method) — $(date '+%Y-%m-%d %H:%M:%S')" | tee -a "$LOG"
 echo "============================================================" | tee -a "$LOG"
-{PKG_UPLOAD_SH}
+{PKG_UPLOAD_SH.replace('@@COLTYPE@@', _COL_TYPE_SQL)}
 echo "[1/4] Concurrent Program (afcpprog)..." | tee -a "$LOG"
 for f in "$WORK_DIR"/CON_*.ldt; do
   [ -e "$f" ] || continue
@@ -8596,12 +8665,13 @@ echo "Upload complete! Log saved to: $LOG" | tee -a "$LOG"
 
     # 5. Extract PKG DDL if applicable
     _, pkg_files, _, _ = _extract_pkg_files_to_dir(prog, app_short, out_dir, src_profile, db_sessions, profiles, data.get("extra_pkgs"))
+    _, obj_files = _write_object_sync_scripts(src_profile, tgt_profile, data.get("sync_objects"), out_dir, db_sessions, profiles)
 
     return jsonify({
         "success": True,
         "folder": out_dir,
         "program": prog,
-        "files": ["config.cfg", "download.sh", "upload.sh"] + pkg_files,
+        "files": ["config.cfg", "download.sh", "upload.sh"] + obj_files + pkg_files,
         "src_jdbc": src_jdbc,
         "tgt_jdbc": tgt_jdbc
     })
@@ -8609,9 +8679,44 @@ echo "Upload complete! Log saved to: $LOG" | tee -a "$LOG"
 # upload.sh step: backup target user_source -> _before_compile/, then compile *.pks before *.pkb.
 # Any backup failure skips the whole compile. Plain string (not f-string) so bash ${...} stays as is.
 PKG_UPLOAD_SH = r'''
-echo "[PKG] PL/SQL Package (backup -> compile)..." | tee -a "$LOG"
 TS=$(date +%Y%m%d_%H%M%S)
 BK_DIR="$WORK_DIR/_before_compile"
+echo "[TABLE/VIEW] Table / View (backup -> run)..." | tee -a "$LOG"
+for f in "$WORK_DIR"/TBL_*.sql "$WORK_DIR"/VW_*.sql; do
+  [ -e "$f" ] || continue
+  mkdir -p "$BK_DIR"
+  set -- $(head -1 "$f"); otype="$3"; full="$4"; owner="${full%%.*}"; obj="${full#*.}"
+  bk="$BK_DIR/${obj}_${otype}_$TS.sql"
+  if [ "$otype" = "VIEW" ]; then
+    sqlplus -S "$DB_USER/$DB_PASS" > "$bk" <<SQLEOF
+SET PAGESIZE 0 FEEDBACK OFF HEADING OFF VERIFY OFF DEFINE OFF LONG 10000000 LONGCHUNKSIZE 32767 LINESIZE 32767 TRIMOUT ON
+WHENEVER SQLERROR EXIT 1
+SELECT 'CREATE OR REPLACE FORCE VIEW "$owner"."$obj" AS' FROM all_views WHERE owner = '$owner' AND view_name = '$obj';
+SELECT text FROM all_views WHERE owner = '$owner' AND view_name = '$obj';
+EXIT
+SQLEOF
+  else
+    sqlplus -S "$DB_USER/$DB_PASS" > "$bk" <<SQLEOF
+SET PAGESIZE 0 FEEDBACK OFF HEADING OFF VERIFY OFF DEFINE OFF LINESIZE 32767 TRIMOUT ON
+WHENEVER SQLERROR EXIT 1
+SELECT DECODE(column_id, 1, 'CREATE TABLE "$owner"."$obj" (', '  ,') || '"' || column_name || '" ' || @@COLTYPE@@ || DECODE(nullable, 'N', ' NOT NULL')
+  FROM all_tab_columns WHERE owner = '$owner' AND table_name = '$obj' ORDER BY column_id;
+SELECT ')' FROM all_tables WHERE owner = '$owner' AND table_name = '$obj';
+EXIT
+SQLEOF
+  fi
+  if [ $? -ne 0 ]; then echo "  !! Backup failed: $owner.$obj -- SKIP $(basename "$f")" | tee -a "$LOG"; continue; fi
+  if [ -s "$bk" ]; then echo "/" >> "$bk"; echo "  OK Backup: $bk" | tee -a "$LOG"; else rm -f "$bk"; echo "  -- $owner.$obj: new object (no backup)" | tee -a "$LOG"; fi
+  echo "  >> Running: $(basename "$f")" | tee -a "$LOG"
+  sqlplus -S "$DB_USER/$DB_PASS" <<SQLEOF 2>&1 | tee -a "$LOG"
+SET DEFINE OFF
+SET SQLBLANKLINES ON
+@"$f"
+EXIT
+SQLEOF
+done
+
+echo "[PKG] PL/SQL Package (backup -> compile)..." | tee -a "$LOG"
 PKG_OK=1; PKG_NAMES=""; HAS_PKG=0
 for f in "$WORK_DIR"/*.pks "$WORK_DIR"/*.pkb; do
   [ -e "$f" ] || continue
@@ -8726,6 +8831,189 @@ def _find_pkg_deps(cursor, owner, name):
     """, owner=owner, name=name)
     return [{"owner": o, "name": n, "standard": bool(s)} for o, n, s in cursor.fetchall()]
 
+_SKIP_OWNERS = ('SYS', 'SYSTEM', 'PUBLIC', 'XDB', 'CTXSYS', 'MDSYS')
+
+def _find_pkg_objects(cursor, pkgs):
+    """Tables/views referenced by the given 'OWNER.NAME' PL/SQL objects (synonyms resolved, DB links skipped).
+    Returns [{owner, name, type, synonym, standard}] — standard = registered in fnd_tables/fnd_views or a product schema."""
+    seen, out = set(), []
+    for full in pkgs:
+        p_owner, _, p_name = str(full).upper().rpartition('.')
+        cursor.execute("""
+            SELECT DISTINCT referenced_owner, referenced_name, referenced_type FROM all_dependencies
+            WHERE owner = :o AND name = :n AND referenced_link_name IS NULL
+              AND referenced_type IN ('TABLE', 'VIEW', 'SYNONYM')
+        """, o=p_owner or 'APPS', n=p_name)
+        for r_owner, r_name, r_type in cursor.fetchall():
+            syn = None
+            if r_type == 'SYNONYM':
+                cursor.execute("SELECT table_owner, table_name FROM all_synonyms WHERE owner = :o AND synonym_name = :n AND db_link IS NULL",
+                               o=r_owner, n=r_name)
+                s = cursor.fetchone()
+                if not s: continue
+                syn, (r_owner, r_name) = f"{r_owner}.{r_name}", s
+                cursor.execute("SELECT object_type FROM all_objects WHERE owner = :o AND object_name = :n AND object_type IN ('TABLE', 'VIEW')",
+                               o=r_owner, n=r_name)
+                t = cursor.fetchone()
+                if not t: continue
+                r_type = t[0]
+            if r_owner in _SKIP_OWNERS or (r_owner, r_name) in seen:
+                continue
+            seen.add((r_owner, r_name))
+            alias_name = syn.split('.')[1] if syn else r_name
+            try:
+                cursor.execute("""
+                    SELECT (SELECT COUNT(*) FROM fnd_tables WHERE table_name IN (:a, :b))
+                         + (SELECT COUNT(*) FROM fnd_views WHERE view_name IN (:a, :b))
+                         + (SELECT COUNT(*) FROM fnd_oracle_userid WHERE oracle_username = :o AND oracle_username <> 'APPS'
+                              AND oracle_username NOT LIKE 'XX%' AND read_only_flag IN ('A', 'E', 'U'))
+                    FROM dual""", a=r_name, b=alias_name, o=r_owner)
+                std = cursor.fetchone()[0] > 0
+            except Exception:
+                std = False  # non-EBS DB
+            out.append({"owner": r_owner, "name": r_name, "type": r_type, "synonym": syn, "standard": std})
+    return sorted(out, key=lambda x: (x["standard"], x["type"], x["name"]))
+
+# all_tab_columns -> 'VARCHAR2(240 BYTE)' / 'NUMBER(10,2)'. Shared by Python and upload.sh (DBMS_METADATA crashes some 11.2 DBs)
+_COL_TYPE_SQL = """CASE WHEN data_type IN ('VARCHAR2', 'CHAR') THEN data_type || '(' || char_length || DECODE(char_used, 'C', ' CHAR', ' BYTE') || ')'
+     WHEN data_type IN ('NVARCHAR2', 'NCHAR') THEN data_type || '(' || char_length || ')'
+     WHEN data_type = 'NUMBER' THEN CASE WHEN data_precision IS NULL THEN DECODE(data_scale, 0, 'INTEGER', 'NUMBER')
+                                         ELSE 'NUMBER(' || data_precision || ',' || NVL(data_scale, 0) || ')' END
+     WHEN data_type IN ('RAW', 'UROWID') THEN data_type || '(' || data_length || ')'
+     WHEN data_type = 'FLOAT' THEN 'FLOAT(' || data_precision || ')'
+     ELSE data_type END"""
+
+def _obj_columns(cursor, owner, name, with_null=False):
+    cursor.execute(f"""SELECT column_name, {_COL_TYPE_SQL}, nullable FROM all_tab_columns
+                       WHERE owner = :o AND table_name = :n ORDER BY column_id""", o=owner, n=name)
+    return [(r[0], r[1], r[2]) if with_null else (r[0], r[1]) for r in cursor.fetchall()]
+
+def _view_text(cursor, owner, name):
+    cursor.execute("SELECT text FROM all_views WHERE owner = :o AND view_name = :n", o=owner, n=name)
+    r = cursor.fetchone()
+    return (r[0] or '').strip().rstrip(';').rstrip() if r else None
+
+def _table_ddl(cursor, owner, name):
+    """CREATE TABLE from all_tab_columns + primary key (no storage/tablespace, defaults or indexes)."""
+    cols = [f'  "{c}" {sig}' + (' NOT NULL' if nul == 'N' else '') for c, sig, nul in _obj_columns(cursor, owner, name, True)]
+    cursor.execute("""SELECT c.constraint_name, cc.column_name FROM all_constraints c, all_cons_columns cc
+                      WHERE c.owner = :o AND c.table_name = :n AND c.constraint_type = 'P'
+                        AND cc.owner = c.owner AND cc.constraint_name = c.constraint_name ORDER BY cc.position""", o=owner, n=name)
+    pk = cursor.fetchall()
+    if pk:
+        cols.append(f'  CONSTRAINT "{pk[0][0]}" PRIMARY KEY (' + ", ".join(f'"{r[1]}"' for r in pk) + ')')
+    return f'CREATE TABLE "{owner}"."{name}" (\n' + ",\n".join(cols) + "\n)"
+
+def _view_ddl(cursor, owner, name):
+    cols = ", ".join(f'"{c}"' for c, _ in _obj_columns(cursor, owner, name))
+    return f'CREATE OR REPLACE FORCE VIEW "{owner}"."{name}" ({cols}) AS\n{_view_text(cursor, owner, name)}'
+
+def _compare_obj(src, tgt, obj):
+    """Compare one table/view between source and target cursors. Returns obj + {status: SAME|MISSING|DIFF, diffs, add, modify}."""
+    owner, name, otype = obj["owner"], obj["name"], obj["type"]
+    tgt.execute("SELECT object_type FROM all_objects WHERE owner = :o AND object_name = :n AND object_type IN ('TABLE', 'VIEW')",
+                o=owner, n=name)
+    t = tgt.fetchone()
+    res = dict(obj, status="SAME", diffs=[], add=[], modify=[])
+    if not t:
+        res["status"] = "MISSING"
+        return res
+    if t[0] != otype:
+        res.update(status="DIFF", diffs=[f"ปลายทางเป็น {t[0]} แต่ต้นทางเป็น {otype}"])
+        return res
+    s_cols, t_cols = _obj_columns(src, owner, name), dict(_obj_columns(tgt, owner, name))
+    for c, sig in s_cols:
+        if c not in t_cols:
+            res["add"].append((c, sig)); res["diffs"].append(f"+{c} {sig} (ไม่มีในปลายทาง)")
+        elif t_cols[c] != sig:
+            res["modify"].append((c, sig)); res["diffs"].append(f"~{c} {t_cols[c]} → {sig}")
+    s_names = {c for c, _ in s_cols}
+    res["diffs"] += [f"-{c} (มีเฉพาะปลายทาง — ไม่ลบ)" for c in t_cols if c not in s_names]
+    if otype == 'VIEW':
+        norm = lambda s: re.sub(r'\s+', ' ', s or '').strip().upper()
+        if norm(_view_text(src, owner, name)) != norm(_view_text(tgt, owner, name)):
+            res["diffs"].append("SQL ของ View ต่างกัน")
+    if res["diffs"]:
+        res["status"] = "DIFF"
+    return res
+
+def _sync_obj_statements(src, cmp):
+    """DDL statements that make the target match the source for one compared object."""
+    owner, name, otype = cmp["owner"], cmp["name"], cmp["type"]
+    q = f'"{owner}"."{name}"'
+    if otype == 'VIEW':
+        stmts = [_view_ddl(src, owner, name)]
+    elif cmp["status"] == "MISSING":
+        stmts = [_table_ddl(src, owner, name)]
+    else:
+        stmts = [f'ALTER TABLE {q} ADD ("{c}" {sig})' for c, sig in cmp["add"]]
+        stmts += [f'ALTER TABLE {q} MODIFY ("{c}" {sig})' for c, sig in cmp["modify"]]
+    if cmp.get("synonym") and cmp["status"] == "MISSING":
+        s_owner, s_name = cmp["synonym"].split('.')
+        stmts.append(f'CREATE OR REPLACE SYNONYM "{s_owner}"."{s_name}" FOR {q}')
+    return stmts
+
+def _write_object_sync_scripts(src_key, tgt_key, objs, out_dir, db_sess, profs):
+    """Write TBL_<NAME>.sql / VW_<NAME>.sql (statements separated by '/' lines) for selected objects. Returns (logs, files)."""
+    logs, files = [], []
+    if not objs or not tgt_key:
+        return logs, files
+    try:
+        src, tgt = _profile_conn(src_key, db_sess, profs), _profile_conn(tgt_key, db_sess, profs)
+        sc, tc = src.cursor(), tgt.cursor()
+        logs.append(f"\n--- [TABLE/VIEW] สร้างสคริปต์ปรับโครงสร้าง {src_key} → {tgt_key} ---")
+        for o in objs:
+            obj = {"owner": str(o.get("owner", "")).upper(), "name": str(o.get("name", "")).upper(),
+                   "type": str(o.get("type", "")).upper(), "synonym": o.get("synonym")}
+            try:
+                cmp = _compare_obj(sc, tc, obj)
+                if cmp["status"] == "SAME":
+                    logs.append(f"  -- {obj['name']}: เหมือนกันแล้ว ไม่ต้องสร้างสคริปต์"); continue
+                if cmp["type"] == 'TABLE' and cmp["status"] == "DIFF" and not (cmp["add"] or cmp["modify"]):
+                    logs.append(f"  -- {obj['name']}: ต่างกันแต่สร้างสคริปต์อัตโนมัติไม่ได้ ({'; '.join(cmp['diffs'])})"); continue
+                stmts = _sync_obj_statements(sc, cmp)
+                fname = f"{'VW' if obj['type'] == 'VIEW' else 'TBL'}_{obj['name']}.sql"
+                with open(os.path.join(out_dir, fname), "w", encoding="utf-8", newline="\n") as f:
+                    f.write(f"-- {cmp['status']} {obj['type']} {obj['owner']}.{obj['name']} ({src_key} -> {tgt_key})\n")
+                    for d in cmp["diffs"]: f.write(f"--   {d}\n")
+                    f.write("".join(s.rstrip().rstrip(';') + "\n/\n" for s in stmts))
+                files.append(fname)
+                logs.append(f"  ✓ {fname} ({cmp['status']}, {len(stmts)} คำสั่ง)")
+            except Exception as oe:
+                logs.append(f"  ✗ {obj['name']}: {oe}")
+        sc.close(); tc.close(); src.close(); tgt.close()
+    except Exception as e:
+        logs.append(f"[WARN] สร้างสคริปต์ Table/View ไม่สำเร็จ: {e}")
+    return logs, files
+
+@app.route("/api/fndload/check_objects", methods=["POST"])
+def api_fndload_check_objects():
+    """Compare tables/views used by the PKG(s) between source and target DB."""
+    global active_session_key, db_sessions
+    data = request.json or {}
+    src_key = data.get("src_profile", "").strip() or active_session_key
+    tgt_key = data.get("tgt_profile", "").strip()
+    pkgs = data.get("pkgs") or []
+    if not tgt_key or not pkgs:
+        return jsonify({"success": False, "error": "ต้องระบุ Target DB และ PKG"}), 400
+    if src_key == tgt_key:
+        return jsonify({"success": False, "error": "Source และ Target เป็น DB เดียวกัน"}), 400
+    profs = load_saved_profiles().get("profiles", {})
+    try:
+        src, tgt = _profile_conn(src_key, db_sessions, profs), _profile_conn(tgt_key, db_sessions, profs)
+        if not src or not tgt:
+            return jsonify({"success": False, "error": "ไม่พบ Profile ของ Source/Target"}), 400
+        sc, tc = src.cursor(), tgt.cursor()
+        objs = []
+        for o in _find_pkg_objects(sc, pkgs):
+            c = _compare_obj(sc, tc, o)
+            c.pop("add"); c.pop("modify")
+            objs.append(c)
+        sc.close(); tc.close(); src.close(); tgt.close()
+        return jsonify({"success": True, "objects": objs})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 def _write_plsql_source(cursor, owner, name, obj_type, out_dir, log_lines, downloaded):
     for src_type, ext in _PLSQL_SRC_TYPES.get(obj_type, []):
         cursor.execute("SELECT text FROM all_source WHERE owner = :o AND name = :n AND type = :t ORDER BY line",
@@ -8743,15 +9031,70 @@ def _write_plsql_source(cursor, owner, name, obj_type, out_dir, log_lines, downl
 _PLSQL_HEAD_RE = re.compile(r'^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:NON)?EDITIONABLE\s+)?'
                             r'(PACKAGE\s+BODY|PACKAGE|PROCEDURE|FUNCTION)\s+(?:"?\w+"?\s*\.\s*)?"?([\w$#]+)"?', re.I)
 
-def _compile_plsql_files(profile, alias, plsql_files):
+_SYNC_HEAD_RE = re.compile(r'^--\s*\w+\s+(TABLE|VIEW)\s+([\w$#]+)\.([\w$#]+)', re.M)
+
+def _run_sync_sql_files(profile, alias, sync_files, results):
+    """Run TBL_*.sql then VW_*.sql [(filename, text)] on the target. Each existing object's DDL is backed up first
+    (backup fails = file skipped). Statements are separated by '/' lines. Returns log lines."""
+    log = []
+    try:
+        conn = create_connection(profile["host"], profile["port"], profile.get("service_name"), profile.get("sid"),
+                                 profile["user"], profile["password"])
+    except Exception as e:
+        for fname, _ in sync_files:
+            results.append({"step": "[4/7] Table / View", "file": fname, "ok": False, "note": "เชื่อมต่อ DB ไม่ได้"})
+        return [f"  ✗ เชื่อมต่อ DB ไม่ได้: {e}"]
+    cur = conn.cursor()
+    for prefix, step in (("TBL_", "[4/7] Table (Create / Alter)"), ("VW_", "[5/7] View (Create or Replace)")):
+        group = sorted(x for x in sync_files if x[0].upper().startswith(prefix))
+        if not group: continue
+        log.append(f"\n--- {step} บน {alias} ---")
+        for fname, text in group:
+            m = _SYNC_HEAD_RE.search(text)
+            if not m:
+                log.append(f"  ✗ ไม่สำเร็จ: {fname} — ไม่พบ header '-- <STATUS> <TYPE> <OWNER>.<NAME>'")
+                results.append({"step": step, "file": fname, "ok": False, "note": "ไฟล์ไม่ได้สร้างจาก JNavigator"}); continue
+            otype, owner, name = m.group(1).upper(), m.group(2).upper(), m.group(3).upper()
+            try:  # backup current target DDL
+                cur.execute("SELECT COUNT(*) FROM all_objects WHERE owner = :o AND object_name = :n AND object_type = :t", o=owner, n=name, t=otype)
+                if cur.fetchone()[0]:
+                    ddl = _view_ddl(cur, owner, name) if otype == 'VIEW' else _table_ddl(cur, owner, name)
+                    log.append(f"  🛡️ Backup {owner}.{name} ({otype}): " + _save_backup(cur, alias, name, otype, ddl + "\n/\n"))
+            except Exception as be:
+                log.append(f"  ✗ ไม่สำเร็จ: {fname} — Backup ล้มเหลว ไม่ได้รัน: {be}")
+                results.append({"step": step, "file": fname, "ok": False, "note": "Backup ไม่ผ่าน — ไม่ได้รัน"}); continue
+            errs = []
+            for stmt in re.split(r'^\s*/\s*$', text, flags=re.M):
+                sql = "\n".join(l for l in stmt.strip().splitlines() if not l.lstrip().startswith('--')).strip()
+                if not sql: continue
+                try:
+                    cur.execute(sql)
+                except Exception as se:
+                    errs.append(str(se).splitlines()[0])
+            if errs:
+                log.append(f"  ✗ ไม่สำเร็จ: {fname} — " + " | ".join(errs[:5]))
+                results.append({"step": step, "file": fname, "ok": False, "note": errs[0][:200]})
+            else:
+                log.append(f"  ✓ สำเร็จ: {fname}")
+                results.append({"step": step, "file": fname, "ok": True, "note": ""})
+    cur.close()
+    conn.close()
+    return log
+
+def _compile_plsql_files(profile, alias, plsql_files, results=None):
     """Compile [(filename, code)] on the target: backup ALL existing sources first (no backup = no compile),
-    specs before bodies, then report user_errors. Returns log lines."""
-    log = ["\n--- [PKG] Backup -> Compile on " + alias + " ---"]
+    specs before bodies, then report user_errors. Returns log lines; appends {step,file,ok,note} to results."""
+    step = "[6/7] PL/SQL Package (Backup → Compile)"
+    results = results if results is not None else []
+    log = [f"\n--- {step} บน {alias} ---"]
+    def res(file, ok, note=""):
+        results.append({"step": step, "file": file, "ok": ok, "note": note})
     items = []
     for fname, code in plsql_files:
         m = _PLSQL_HEAD_RE.match(code)
         if not m:
-            log.append(f"  ✗ {fname}: ไม่พบ CREATE [OR REPLACE] PACKAGE/PROCEDURE/FUNCTION — ข้าม")
+            log.append(f"  ✗ ไม่สำเร็จ: {fname} — ไม่พบ CREATE [OR REPLACE] PACKAGE/PROCEDURE/FUNCTION")
+            res(fname, False, "ไม่พบ CREATE OR REPLACE ในไฟล์")
             continue
         obj_type = re.sub(r'\s+', ' ', m.group(1).upper())
         items.append((0 if obj_type != 'PACKAGE BODY' else 1, fname, m.group(2).upper(), obj_type, code))
@@ -8762,14 +9105,18 @@ def _compile_plsql_files(profile, alias, plsql_files):
         conn = create_connection(profile["host"], profile["port"], profile.get("service_name"), profile.get("sid"),
                                  profile["user"], profile["password"])
     except Exception as e:
-        return log + [f"  ✗ Connect DB ไม่ได้ — ไม่ได้ compile: {e}"]
+        log.append(f"  ✗ เชื่อมต่อ DB ไม่ได้ — ไม่ได้ Compile: {e}")
+        for _, fname, *_ in items: res(fname, False, "เชื่อมต่อ DB ไม่ได้")
+        return log
     cursor = conn.cursor()
     try:
         for _, fname, name, obj_type, _ in items:
             try:
-                log.append(f"  🛡️ {name} ({obj_type}): " + _backup_old_source(cursor, alias, name, obj_type))
+                log.append(f"  🛡️ Backup {name} ({obj_type}): " + _backup_old_source(cursor, alias, name, obj_type))
             except Exception as be:
-                return log + [f"  ✗ Backup ล้มเหลว {name} ({obj_type}): {be}", "  ✗ ยกเลิก Compile PKG ทั้งหมด"]
+                log += [f"  ✗ Backup ล้มเหลว {name} ({obj_type}): {be}", "  ✗ ยกเลิก Compile PKG ทั้งหมด (กฎ: Backup ไม่ผ่าน = ห้าม Compile)"]
+                for _, f2, *_ in items: res(f2, False, "Backup ไม่ผ่าน — ไม่ได้ Compile")
+                return log
         for _, fname, name, obj_type, code in items:
             sql = code.strip()
             if sql.endswith('/'):
@@ -8782,10 +9129,12 @@ def _compile_plsql_files(profile, alias, plsql_files):
                            n=name, t=obj_type)
             errs = cursor.fetchall()
             if errs:
-                log.append(f"  ✗ {name} ({obj_type}): {len(errs)} error(s)")
-                log.extend(f"     L{l}:{c} {t.strip()}" for l, c, t in errs[:20])
+                log.append(f"  ✗ ไม่สำเร็จ: {name} ({obj_type}) — Compile Error {len(errs)} จุด")
+                log.extend(f"     บรรทัด {l}:{c} {t.strip()}" for l, c, t in errs[:20])
+                res(fname, False, f"Compile Error {len(errs)} จุด — บรรทัด {errs[0][0]}: {errs[0][2].strip()}"[:200])
             else:
-                log.append(f"  ✓ Compiled {name} ({obj_type})")
+                log.append(f"  ✓ สำเร็จ: Compile {name} ({obj_type})")
+                res(fname, True)
     finally:
         cursor.close()
         conn.close()
@@ -8971,6 +9320,10 @@ SQLEOF
         pkg_logs, pkg_files, exec_method, exec_file = _extract_pkg_files_to_dir(prog, app_short, out_dir, src_profile or active_session_key, db_sessions, profiles, data.get("extra_pkgs"))
         if pkg_logs: log_lines.extend(pkg_logs)
         if pkg_files: downloaded.extend(pkg_files)
+        obj_logs, obj_files = _write_object_sync_scripts(src_profile or active_session_key, data.get("tgt_profile", "").strip(),
+                                                         data.get("sync_objects"), out_dir, db_sessions, profiles)
+        log_lines.extend(obj_logs)
+        downloaded.extend(obj_files)
 
         # 6. Execution File (RDF, SQL, Host) via SFTP
         if exec_method in ('P', 'Q', 'H') and exec_file:
@@ -10275,10 +10628,10 @@ def api_fndload_upload_folder():
 
     # PROD guard: compiling PKG on PROD needs the target DB password (same rule as /api/plsql/compile)
     tgt = load_saved_profiles().get("profiles", {}).get(target_profile) or db_sessions.get(target_profile) or {}
-    has_plsql = any((f.filename or "").lower().endswith((".pks", ".pkb")) for f in files)
+    has_plsql = any((f.filename or "").lower().endswith((".pks", ".pkb")) or re.match(r"(?i)(TBL|VW)_.*\.sql$", f.filename or "") for f in files)
     if has_plsql and _is_prod_alias(tgt.get("alias") or target_profile) and request.form.get("prod_password") != tgt.get("password"):
         return jsonify({"success": False, "need_confirm": True, "is_prod": True, "target": target_profile,
-                        "error": f"⚠️ {target_profile} เป็น PROD — ต้องใส่รหัสผ่าน DB ก่อน Compile PKG"})
+                        "error": f"⚠️ {target_profile} เป็น PROD — ต้องใส่รหัสผ่าน DB ก่อน Compile PKG / สร้าง Table-View"})
 
     host = _get_app_server_host(target_profile)
     if not host:
@@ -10298,12 +10651,13 @@ def api_fndload_upload_folder():
         stdout.channel.recv_exit_status()
 
         log_lines = []
-        log_lines.append(f"--- Uploading to {remote_tmp} on {host} ---")
+        log_lines.append(f"--- ส่งไฟล์ขึ้น Server {host}:{remote_tmp} ---")
 
         app_short = "XXCUST"
         ds_code = ""
         prog_name = ""
         plsql_files = []
+        sync_files = []
 
         for f in files:
             if not f.filename: continue
@@ -10327,10 +10681,13 @@ def api_fndload_upload_folder():
 
             remote_file = f"{remote_tmp}/{f.filename}"
             sftp.put(local_temp_path, remote_file)
-            log_lines.append(f"Uploaded: {f.filename}")
+            log_lines.append(f"  ✓ ส่งไฟล์: {f.filename}")
             if f.filename.lower().endswith(('.pks', '.pkb')):
                 with open(local_temp_path, encoding='utf-8', errors='replace') as pf:
                     plsql_files.append((f.filename, pf.read()))
+            elif re.match(r"(?i)(TBL|VW)_.*\.sql$", f.filename):
+                with open(local_temp_path, encoding='utf-8', errors='replace') as pf:
+                    sync_files.append((f.filename, pf.read()))
             try:
                 os.remove(local_temp_path)
             except Exception:
@@ -10367,43 +10724,70 @@ def api_fndload_upload_folder():
             stdin, stdout, stderr = ssh.exec_command(full_cmd, timeout=timeout)
             out = stdout.read().decode("utf-8", errors="replace").strip()
             err = stderr.read().decode("utf-8", errors="replace").strip()
-            if out: log_lines.extend(out.splitlines())
+            if out: log_lines.extend(l for l in out.splitlines() if not l.startswith("@@"))
             if err: log_lines.extend([f"[ERR] {l}" for l in err.splitlines()])
+            return out
 
-        run(f"cd {remote_tmp} && for f in CON_*.ldt; do [ -e \"$f\" ] || continue; "
-            f"$FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y UPLOAD $FND_TOP/patch/115/import/afcpprog.lct \"$f\" UPLOAD_MODE=REPLACE CUSTOM_MODE=FORCE; "
-            f"done")
+        results = []  # [{step, file, ok, note}] -> Thai summary in UI
+        err_re = re.compile(r'ORA-\d|APP-FND-|exception|^\s*error', re.I)
 
-        run(f"cd {remote_tmp} && for f in XML_*.ldt; do [ -e \"$f\" ] || continue; "
-            f"$FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y UPLOAD $XDO_TOP/patch/115/import/xdotmpl.lct \"$f\"; "
-            f"done")
+        def run_each(step, pattern, loader_cmd, timeout=180):
+            """Run loader_cmd per file matching pattern; judge each by exit code + errors in output / newest FNDLOAD L*.log."""
+            log_lines.append(f"\n--- {step} ---")
+            out = run(f"cd {remote_tmp} && for f in {pattern}; do [ -e \"$f\" ] || continue; echo \"@@BEGIN $f\"; "
+                      f"{loader_cmd} 2>&1; rc=$?; "
+                      f"l=$(ls -t L*.log 2>/dev/null | head -1); [ -n \"$l\" ] && grep -iE 'ORA-[0-9]|APP-FND-|^ *error|exception' \"$l\" | head -5; "
+                      f"rm -f L*.log O*.out; echo \"@@RC $rc $f\"; done", timeout)
+            buf = []
+            for line in out.splitlines():
+                if line.startswith("@@BEGIN "):
+                    buf = []
+                elif line.startswith("@@RC "):
+                    _, rc, fname = line.split(" ", 2)
+                    bad = [l.strip() for l in buf if err_re.search(l)]
+                    ok = rc == "0" and not bad
+                    note = "" if ok else (bad[0] if bad else f"exit code {rc}")[:200]
+                    results.append({"step": step, "file": fname, "ok": ok, "note": note})
+                    log_lines.append(f"  {'✓ สำเร็จ' if ok else '✗ ไม่สำเร็จ'}: {fname}" + (f" — {note}" if note else ""))
+                else:
+                    buf.append(line)
+            if not any(r["step"] == step for r in results):
+                log_lines.append("  -- ไม่มีไฟล์สำหรับขั้นตอนนี้")
 
         if not ds_code and prog_name:
             ds_code = prog_name
         if not ds_code:
             ds_code = "XXCUST_TMPL"
 
-        run(f"cd {remote_tmp} && for f in TEMPLATE_SOURCE_*.rtf *.rtf; do [ -e \"$f\" ] || continue; "
-            f"java oracle.apps.xdo.oa.util.XDOLoader UPLOAD "
-            f"-DB_USERNAME apps -DB_PASSWORD {apps_pass} "
-            f"-JDBC_CONNECTION '{tgt_jdbc}' "
-            f"-LOB_TYPE TEMPLATE_SOURCE -APPS_SHORT_NAME {app_short} "
-            f"-LOB_CODE {ds_code} -LANGUAGE en -TERRITORY TH -XDO_FILE_TYPE RTF -FILE_CONTENT_TYPE 'application/rtf' "
-            f"-FILE_NAME \"$f\" -CUSTOM_MODE FORCE; "
-            f"done", timeout=300)
+        run_each("[1/7] Concurrent Program (FNDLOAD afcpprog)", "CON_*.ldt",
+                 f"$FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y UPLOAD $FND_TOP/patch/115/import/afcpprog.lct \"$f\" UPLOAD_MODE=REPLACE CUSTOM_MODE=FORCE")
 
+        run_each("[2/7] Data Definition XML (FNDLOAD xdotmpl)", "XML_*.ldt",
+                 f"$FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y UPLOAD $XDO_TOP/patch/115/import/xdotmpl.lct \"$f\"")
+
+        run_each("[3/7] RTF Template (XDOLoader)", "*.rtf",
+                 f"java oracle.apps.xdo.oa.util.XDOLoader UPLOAD "
+                 f"-DB_USERNAME apps -DB_PASSWORD {apps_pass} "
+                 f"-JDBC_CONNECTION '{tgt_jdbc}' "
+                 f"-LOB_TYPE TEMPLATE_SOURCE -APPS_SHORT_NAME {app_short} "
+                 f"-LOB_CODE {ds_code} -LANGUAGE en -TERRITORY TH -XDO_FILE_TYPE RTF -FILE_CONTENT_TYPE 'application/rtf' "
+                 f"-FILE_NAME \"$f\" -CUSTOM_MODE FORCE", timeout=300)
+
+        if sync_files:
+            log_lines.extend(_run_sync_sql_files(p, p.get("alias") or target_profile, sync_files, results))
         if plsql_files:
-            log_lines.extend(_compile_plsql_files(p, p.get("alias") or target_profile, plsql_files))
+            log_lines.extend(_compile_plsql_files(p, p.get("alias") or target_profile, plsql_files, results))
 
-        run(f"cd {remote_tmp} && for f in GROUP_*.ldt; do [ -e \"$f\" ] || continue; "
-            f"$FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y UPLOAD $FND_TOP/patch/115/import/afcpreqg.lct \"$f\" UPLOAD_MODE=REPLACE CUSTOM_MODE=FORCE; "
-            f"done")
+        run_each("[7/7] Request Group (FNDLOAD afcpreqg)", "GROUP_*.ldt",
+                 f"$FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y UPLOAD $FND_TOP/patch/115/import/afcpreqg.lct \"$f\" UPLOAD_MODE=REPLACE CUSTOM_MODE=FORCE")
 
         ssh.exec_command(f"rm -rf {remote_tmp}")
         sftp.close()
         ssh.close()
 
-        return jsonify({"success": True, "log": log_lines})
+        failed = sum(1 for r in results if not r["ok"])
+        log_lines.append(f"\n=== สรุป: สำเร็จ {len(results) - failed} / ไม่สำเร็จ {failed} รายการ ===")
+        return jsonify({"success": True, "log": log_lines, "results": results, "failed": failed})
 
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
