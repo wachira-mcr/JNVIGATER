@@ -3860,9 +3860,9 @@ HTML_TEMPLATE = r"""
                     <input type="text" id="fndOutDir" style="width:100%;" value="C:\Users\MBx13\Desktop\GEN_FND">
                 </div>
 
-                <div id="fndPkgDeps" style="display:none; font-size:0.8rem; border:1px solid var(--panel-border); border-radius:6px; padding:10px 12px; background:var(--bg-dark);"></div>
+                <div id="fndPkgDeps" style="display:none; flex-shrink:0; font-size:0.8rem; border:1px solid var(--panel-border); border-radius:6px; padding:10px 12px; background:var(--bg-dark);"></div>
 
-                <div id="fndStatusMsg" style="display:none; max-height:220px; overflow-y:auto; border-radius:6px; font-size:0.83rem;"></div>
+                <div id="fndStatusMsg" style="display:none; flex-shrink:0; max-height:220px; overflow-y:auto; border-radius:6px; font-size:0.83rem;"></div>
             </div>
             <div class="modal-footer" style="padding: 12px 20px; display:flex; align-items:center; justify-content:space-between; border-top:1px solid var(--panel-border); background:var(--bg-elevated); flex-shrink:0;">
                 <span id="fndNotice" style="font-size:0.75rem; color:var(--text-muted);">จะสร้างโฟลเดอร์แยกตามชื่อ Program ให้อัตโนมัติ</span>
@@ -6662,6 +6662,7 @@ HTML_TEMPLATE = r"""
                         </div>
                     `;
                     btnSubmit.textContent = 'สร้างเรียบร้อย';
+                    statusMsg.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
                     showToast(`สร้างไฟล์ FNDLOAD สำหรับ ${prog} สำเร็จ!`, 3000, 'success');
                 } else {
                     statusMsg.innerHTML = `
@@ -6762,6 +6763,7 @@ HTML_TEMPLATE = r"""
                             </details>
                         </div>`;
                     showToast(`ดึงไฟล์ ${data.files.length} ไฟล์จาก Server สำเร็จ!`, 4000, 'success');
+                    statusMsg.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
                 } else if (data.error === 'NOT_CONFIGURED') {
                     statusMsg.innerHTML = `
                         <div style="background:rgba(210, 153, 34, 0.1); border:1px solid rgba(210, 153, 34, 0.3); color:#d29922; padding:12px; border-radius:6px;">
