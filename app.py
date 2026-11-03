@@ -3813,7 +3813,7 @@ HTML_TEMPLATE = r"""
                 <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
                     <div>
                         <label style="font-size:0.76rem; font-weight:500; color:var(--text-muted); display:block; margin-bottom:4px;">Concurrent Program Short Name:</label>
-                        <input type="text" id="fndProgShort" style="width:100%; font-weight:600; color:var(--accent-blue);" placeholder="e.g. SME_CONFIRM_DATA_GLTBD" oninput="onFndProgShortChanged()">
+                        <input type="text" id="fndProgShort" style="width:100%; font-weight:600; color:var(--accent-blue);" placeholder="e.g. SME_CONFIRM_DATA_GLTBD" oninput="onFndProgShortChanged()" onchange="checkFndPkgDeps()">
                     </div>
                     <div>
                         <label style="font-size:0.76rem; font-weight:500; color:var(--text-muted); display:block; margin-bottom:4px;">Application Short Name:</label>
@@ -3842,7 +3842,7 @@ HTML_TEMPLATE = r"""
                 <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
                     <div>
                         <label style="font-size:0.76rem; font-weight:500; color:var(--success); display:block; margin-bottom:4px;">Source DB Site (Download จาก):</label>
-                        <select id="fndSrcDb" style="width:100%; font-weight:600;"></select>
+                        <select id="fndSrcDb" style="width:100%; font-weight:600;" onchange="checkFndPkgDeps()"></select>
                     </div>
                     <div>
                         <label style="font-size:0.76rem; font-weight:500; color:var(--warning); display:block; margin-bottom:4px;">Target DB Site (Clone ไปยังไซต์ใด):</label>
@@ -3854,6 +3854,8 @@ HTML_TEMPLATE = r"""
                     <label style="font-size:0.76rem; font-weight:500; color:var(--text-muted); display:block; margin-bottom:4px;">Output Directory:</label>
                     <input type="text" id="fndOutDir" style="width:100%;" value="C:\Users\MBx13\Desktop\GEN_FND">
                 </div>
+
+                <div id="fndPkgDeps" style="display:none; font-size:0.8rem; border:1px solid var(--panel-border); border-radius:6px; padding:10px 12px; background:var(--bg-dark);"></div>
 
                 <div id="fndStatusMsg" style="display:none; max-height:220px; overflow-y:auto; border-radius:6px; font-size:0.83rem;"></div>
             </div>
@@ -6435,8 +6437,68 @@ HTML_TEMPLATE = r"""
                 const otherTgt = cachedProfilesList.find(k => k !== activeKey);
                 if (otherTgt) tgtSelect.value = otherTgt;
             }
-            
+
             modal.style.display = 'flex';
+            checkFndPkgDeps();
+        }
+
+        async function checkFndPkgDeps() {
+            const box = document.getElementById('fndPkgDeps');
+            const prog = document.getElementById('fndProgShort').value.trim();
+            box.style.display = 'none';
+            box.innerHTML = '';
+            if (!prog) return;
+            box.style.display = 'block';
+            box.innerHTML = '<span style="color:var(--text-muted);">⏳ กำลังตรวจสอบ PKG...</span>';
+            try {
+                const res = await fetch('/api/fndload/pkg_deps', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        program_name: prog,
+                        app_short_name: document.getElementById('fndAppShort').value.trim(),
+                        src_profile: document.getElementById('fndSrcDb').value
+                    })
+                });
+                const d = await res.json();
+                if (document.getElementById('fndProgShort').value.trim() !== prog) return; // stale
+                if (!d.success) { box.innerHTML = `<span style="color:var(--warning);">ตรวจสอบ PKG ไม่ได้: ${escapeHtml(d.error || '')}</span>`; return; }
+                const appInput = document.getElementById('fndAppShort');
+                let appFix = '';
+                if (d.app_short_name && appInput.value.trim().toUpperCase() !== d.app_short_name) {
+                    appFix = `<div style="color:var(--warning); font-size:0.76rem; margin-bottom:6px;">⚠️ แก้ Application Short Name: ${escapeHtml(appInput.value)} ➔ ${escapeHtml(d.app_short_name)} (ตาม DB)</div>`;
+                    appInput.value = d.app_short_name;
+                }
+                if (!d.name) {
+                    if (appFix) { box.innerHTML = appFix; return; }
+                    if (d.exec_method === 'I') box.innerHTML = `<span style="color:var(--warning);">⚠️ ไม่พบ PL/SQL object ของ ${escapeHtml(d.exec_file || '')} ใน DB</span>`;
+                    else box.style.display = 'none';
+                    return;
+                }
+                let html = appFix + `<div style="font-weight:600; color:var(--accent-blue); margin-bottom:4px;">📦 ${escapeHtml(d.object_type)}: ${escapeHtml(d.owner)}.${escapeHtml(d.name)}</div>
+                    <div style="color:var(--text-muted); font-size:0.76rem; margin-bottom:6px;">จะดึง DDL ของ PKG นี้ (.pks / .pkb) มาด้วยอัตโนมัติ</div>`;
+                if (d.deps.length) {
+                    html += `<div style="margin:6px 0 4px; color:var(--text-main);">พบ PKG ที่ถูกเรียกใช้ภายใน <b>${d.deps.length}</b> ตัว — ต้องการโหลด DDL มาด้วยหรือไม่?</div>
+                        <div style="max-height:140px; overflow-y:auto; display:flex; flex-direction:column; gap:2px;">` +
+                        d.deps.map(p => {
+                            const full = `${p.owner}.${p.name}`;
+                            return `<label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                                <input type="checkbox" class="fnd-dep-pkg" value="${escapeHtml(full)}" ${p.standard ? '' : 'checked'}>
+                                <span>${escapeHtml(full)}</span>
+                                ${p.standard ? '<span style="font-size:0.7rem; color:var(--text-muted);">(EBS Standard)</span>' : '<span style="font-size:0.7rem; color:var(--success);">(Custom)</span>'}
+                            </label>`;
+                        }).join('') + `</div>`;
+                } else {
+                    html += `<div style="color:var(--text-muted); font-size:0.76rem;">ไม่พบ PKG อื่นที่ถูกเรียกใช้ภายใน</div>`;
+                }
+                box.innerHTML = html;
+            } catch (e) {
+                box.innerHTML = `<span style="color:var(--warning);">ตรวจสอบ PKG ไม่ได้: ${escapeHtml(e.message)}</span>`;
+            }
+        }
+
+        function getFndExtraPkgs() {
+            return Array.from(document.querySelectorAll('#fndPkgDeps .fnd-dep-pkg:checked')).map(c => c.value);
         }
 
         function closeFndLoadModal() {
@@ -6485,7 +6547,8 @@ HTML_TEMPLATE = r"""
                         src_profile: srcProfile,
                         tgt_profile: tgtProfile,
                         output_dir: outDir,
-                        folder_name: document.getElementById('fndProgName').value.trim()
+                        folder_name: document.getElementById('fndProgName').value.trim(),
+                        extra_pkgs: getFndExtraPkgs()
                     })
                 });
                 const data = await res.json();
@@ -6498,7 +6561,8 @@ HTML_TEMPLATE = r"""
                         program_name: prog, app_short_name: appShort,
                         ds_code: dsCode, tmpl_code: tmplCode,
                         src_profile: srcProfile, output_dir: outDir,
-                        folder_name: document.getElementById('fndProgName').value.trim()
+                        folder_name: document.getElementById('fndProgName').value.trim(),
+                        extra_pkgs: getFndExtraPkgs()
                     };
                     statusMsg.innerHTML = `
                         <div style="background:rgba(63, 185, 80, 0.1); border:1px solid rgba(63, 185, 80, 0.3); color:#3fb950; padding:12px; border-radius:6px;">
@@ -8519,73 +8583,135 @@ echo "Upload complete! Log saved to: $LOG" | tee -a "$LOG"
             pass
 
     # 5. Extract PKG DDL if applicable
-    _extract_pkg_files_to_dir(prog, app_short, out_dir, src_profile, db_sessions, profiles)
+    _, pkg_files, _, _ = _extract_pkg_files_to_dir(prog, app_short, out_dir, src_profile, db_sessions, profiles, data.get("extra_pkgs"))
 
     return jsonify({
         "success": True,
         "folder": out_dir,
         "program": prog,
-        "files": ["config.cfg", "download.sh", "upload.sh"],
+        "files": ["config.cfg", "download.sh", "upload.sh"] + pkg_files,
         "src_jdbc": src_jdbc,
         "tgt_jdbc": tgt_jdbc
     })
 
-def _extract_pkg_files_to_dir(prog, app_short, out_dir, profile_key, db_sess, profs):
-    log_lines = []
-    downloaded = []
-    try:
-        p = profs.get(profile_key) or db_sess.get(profile_key)
-        if not p: return log_lines, downloaded, None, None
-        
-        conn = create_connection(p["host"], p["port"], p.get("service_name"), p.get("sid"), p["user"], p["password"])
-        cursor = conn.cursor()
+_PLSQL_SRC_TYPES = {
+    'PACKAGE':   [('PACKAGE', 'pks'), ('PACKAGE BODY', 'pkb')],
+    'PROCEDURE': [('PROCEDURE', 'prc')],
+    'FUNCTION':  [('FUNCTION', 'fnc')],
+}
+
+def _profile_conn(profile_key, db_sess, profs):
+    p = profs.get(profile_key) or db_sess.get(profile_key)
+    if not p: return None
+    return create_connection(p["host"], p["port"], p.get("service_name"), p.get("sid"), p["user"], p["password"])
+
+def _resolve_prog_plsql(cursor, prog, app_short):
+    """Return (exec_method, exec_file, owner, obj_name, obj_type, real_app_short).
+    owner/obj_* are None unless PL/SQL ('I'). Falls back to any app when app_short doesn't match."""
+    cursor.execute("""
+        SELECT fe.execution_method_code, fe.execution_file_name, fa.application_short_name
+        FROM fnd_concurrent_programs fcp, fnd_executables fe, fnd_application fa
+        WHERE fcp.executable_id = fe.executable_id
+          AND fcp.executable_application_id = fe.application_id
+          AND fcp.application_id = fa.application_id
+          AND fcp.concurrent_program_name = :prog
+        ORDER BY DECODE(fa.application_short_name, :app_short, 0, 1)
+    """, prog=prog, app_short=app_short)
+    row = cursor.fetchone()
+    if not row: return None, None, None, None, None, None
+    exec_method, exec_file, real_app = row
+    if exec_method != 'I' or not exec_file:
+        return exec_method, exec_file, None, None, None, real_app
+    # execution_file_name = [SCHEMA.]PKG.PROC or [SCHEMA.]PROC
+    parts = exec_file.upper().split('.')
+    candidates = [parts[-2], parts[-1]] if len(parts) >= 2 else [parts[0]]
+    for name in candidates:
         cursor.execute("""
-            SELECT fe.execution_method_code, fe.execution_file_name
-            FROM fnd_concurrent_programs fcp, fnd_executables fe
-            WHERE fcp.executable_id = fe.executable_id
-              AND fcp.concurrent_program_name = :prog
-              AND fcp.application_id = (SELECT application_id FROM fnd_application WHERE application_short_name = :app_short)
-        """, prog=prog, app_short=app_short)
-        row = cursor.fetchone()
-        
-        if row:
-            exec_method, exec_file = row[0], row[1]
-            if exec_method == 'I' and exec_file:
-                log_lines.append(f"\n--- [PKG] Extracting DB Package: {exec_file} ---")
-                
-                cursor.execute("SELECT owner FROM all_objects WHERE object_name = :name AND object_type IN ('PACKAGE', 'PACKAGE BODY') FETCH FIRST 1 ROWS ONLY", name=exec_file.upper())
-                owner_row = cursor.fetchone()
-                owner = owner_row[0] if owner_row else None
-                
-                cursor.execute("""
-                    BEGIN
-                        DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM, 'PRETTY', true);
-                        DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM, 'SQLTERMINATOR', true);
-                    END;
-                """)
-                for obj_type, ext in [('PACKAGE', 'pks'), ('PACKAGE_BODY', 'pkb')]:
-                    try:
-                        if owner:
-                            cursor.execute(f"SELECT DBMS_METADATA.GET_DDL('{obj_type}', :name, :schema) FROM DUAL", name=exec_file.upper(), schema=owner)
-                        else:
-                            cursor.execute(f"SELECT DBMS_METADATA.GET_DDL('{obj_type}', :name) FROM DUAL", name=exec_file.upper())
-                        
-                        clob = cursor.fetchone()[0]
-                        text = clob.read() if hasattr(clob, 'read') else str(clob)
-                        if text:
-                            fpath = os.path.join(out_dir, f"{exec_file.upper()}.{ext}")
-                            with open(fpath, "w", encoding="utf-8") as f:
-                                f.write(text.strip() + "\n/\n")
-                            downloaded.append(f"{exec_file.upper()}.{ext}")
-                            log_lines.append(f"  ✓ Saved {ext.upper()}: {exec_file.upper()}.{ext}")
-                    except Exception as ex:
-                        log_lines.append(f"  ✗ Failed to get {obj_type}: {ex}")
+            SELECT owner, object_type FROM all_objects
+            WHERE object_name = :name AND object_type IN ('PACKAGE', 'PROCEDURE', 'FUNCTION')
+            ORDER BY DECODE(owner, 'APPS', 1, 0)
+        """, name=name)
+        r = cursor.fetchone()
+        if r: return exec_method, exec_file, r[0], name, r[1], real_app
+    return exec_method, exec_file, None, None, None, real_app
+
+def _find_pkg_deps(cursor, owner, name):
+    """Packages referenced inside owner.name (1 level). standard=True when the spec carries an EBS $Header."""
+    cursor.execute("""
+        SELECT DISTINCT d.referenced_owner, d.referenced_name,
+               (SELECT COUNT(*) FROM all_source s
+                 WHERE s.owner = d.referenced_owner AND s.name = d.referenced_name
+                   AND s.type = 'PACKAGE' AND s.line <= 10 AND s.text LIKE '%$Header%') AS std
+        FROM all_dependencies d
+        WHERE d.owner = :owner AND d.name = :name
+          AND d.type IN ('PACKAGE', 'PACKAGE BODY', 'PROCEDURE', 'FUNCTION')
+          AND d.referenced_type = 'PACKAGE'
+          AND d.referenced_name <> d.name
+          AND d.referenced_owner NOT IN ('SYS', 'SYSTEM', 'PUBLIC', 'XDB', 'CTXSYS', 'MDSYS')
+        ORDER BY 3, 2
+    """, owner=owner, name=name)
+    return [{"owner": o, "name": n, "standard": bool(s)} for o, n, s in cursor.fetchall()]
+
+def _write_plsql_source(cursor, owner, name, obj_type, out_dir, log_lines, downloaded):
+    for src_type, ext in _PLSQL_SRC_TYPES.get(obj_type, []):
+        cursor.execute("SELECT text FROM all_source WHERE owner = :o AND name = :n AND type = :t ORDER BY line",
+                       o=owner, n=name, t=src_type)
+        lines = [r[0] or '' for r in cursor.fetchall()]
+        if not lines:
+            log_lines.append(f"  ✗ No source for {owner}.{name} ({src_type})")
+            continue
+        fname = f"{name}.{ext}"
+        with open(os.path.join(out_dir, fname), "w", encoding="utf-8", newline="\n") as f:
+            f.write("CREATE OR REPLACE " + "".join(lines).rstrip() + "\n/\n")
+        downloaded.append(fname)
+        log_lines.append(f"  ✓ Saved {src_type}: {fname} ({len(lines)} lines)")
+
+def _extract_pkg_files_to_dir(prog, app_short, out_dir, profile_key, db_sess, profs, extra_pkgs=None):
+    log_lines, downloaded = [], []
+    exec_method = exec_file = None
+    try:
+        conn = _profile_conn(profile_key, db_sess, profs)
+        if not conn: return log_lines, downloaded, None, None
+        cursor = conn.cursor()
+        exec_method, exec_file, owner, name, obj_type, _ = _resolve_prog_plsql(cursor, prog, app_short)
+        if name:
+            log_lines.append(f"\n--- [PKG] Extracting {obj_type} {owner}.{name} (from {exec_file}) ---")
+            _write_plsql_source(cursor, owner, name, obj_type, out_dir, log_lines, downloaded)
+        elif exec_method == 'I':
+            log_lines.append(f"[WARN] PL/SQL object for '{exec_file}' not found in DB")
+        for full in extra_pkgs or []:
+            d_owner, _, d_name = str(full).upper().rpartition('.')
+            log_lines.append(f"\n--- [PKG-DEP] {d_owner or 'APPS'}.{d_name} ---")
+            _write_plsql_source(cursor, d_owner or 'APPS', d_name, 'PACKAGE', out_dir, log_lines, downloaded)
         cursor.close()
         conn.close()
     except Exception as e:
         log_lines.append(f"[WARN] DB PKG extraction step failed: {e}")
-        
-    return log_lines, downloaded, exec_method if 'exec_method' in locals() else None, exec_file if 'exec_file' in locals() else None
+    return log_lines, downloaded, exec_method, exec_file
+
+@app.route("/api/fndload/pkg_deps", methods=["POST"])
+def api_fndload_pkg_deps():
+    """Detect whether the program runs a PL/SQL PKG and list packages it calls."""
+    global active_session_key, db_sessions
+    data = request.json or {}
+    prog = data.get("program_name", "").strip().upper()
+    app_short = data.get("app_short_name", "").strip().upper() or "XXCUST"
+    profile_key = data.get("src_profile", "").strip() or active_session_key
+    if not prog:
+        return jsonify({"success": False, "error": "program_name required"}), 400
+    try:
+        conn = _profile_conn(profile_key, db_sessions, load_saved_profiles().get("profiles", {}))
+        if not conn:
+            return jsonify({"success": False, "error": f"Unknown profile: {profile_key}"}), 400
+        cursor = conn.cursor()
+        exec_method, exec_file, owner, name, obj_type, real_app = _resolve_prog_plsql(cursor, prog, app_short)
+        deps = _find_pkg_deps(cursor, owner, name) if name else []
+        cursor.close()
+        conn.close()
+        return jsonify({"success": True, "app_short_name": real_app, "exec_method": exec_method, "exec_file": exec_file,
+                        "owner": owner, "name": name, "object_type": obj_type, "deps": deps})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route("/api/fndload/run_download", methods=["POST"])
 def api_fndload_run_download():
@@ -8717,7 +8843,7 @@ SQLEOF
             f"REQUEST_GROUP_UNIT UNIT_NAME={prog}")
 
         # 5. DB Package Extract (if PKG)
-        pkg_logs, pkg_files, exec_method, exec_file = _extract_pkg_files_to_dir(prog, app_short, out_dir, src_profile or active_session_key, db_sessions, profiles)
+        pkg_logs, pkg_files, exec_method, exec_file = _extract_pkg_files_to_dir(prog, app_short, out_dir, src_profile or active_session_key, db_sessions, profiles, data.get("extra_pkgs"))
         if pkg_logs: log_lines.extend(pkg_logs)
         if pkg_files: downloaded.extend(pkg_files)
 
