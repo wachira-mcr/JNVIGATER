@@ -6301,7 +6301,7 @@ HTML_TEMPLATE = r"""
             }
         }
 
-        async function submitFndUpload() {
+        async function submitFndUpload(prodPassword) {
             if (!pendingFndFiles || pendingFndFiles.length === 0) return;
             const targetSite = document.getElementById('fndUploadTargetSite').value || getActiveSessionKey();
             if (!targetSite) {
@@ -6326,6 +6326,7 @@ HTML_TEMPLATE = r"""
 
             const formData = new FormData();
             formData.append('target_profile', targetSite);
+            if (typeof prodPassword === 'string') formData.append('prod_password', prodPassword);
             for (let i = 0; i < pendingFndFiles.length; i++) {
                 formData.append('files', pendingFndFiles[i], pendingFndFiles[i].name);
             }
@@ -6338,7 +6339,18 @@ HTML_TEMPLATE = r"""
                     body: formData
                 });
                 const data = await res.json();
-                
+
+                if (data.need_confirm) {
+                    const pw = prompt(data.error + "\\nกรอกรหัสผ่าน DB PROD:");
+                    if (pw === null) {
+                        statusMsg.innerHTML = `<div style="color:var(--warning); padding:8px;">ยกเลิกการอัปโหลด (ไม่ได้ Compile PKG ลง PROD)</div>`;
+                        btnSubmit.disabled = false;
+                        btnSubmit.textContent = '🚀 อัปโหลดเข้า Server';
+                        return;
+                    }
+                    return submitFndUpload(pw);
+                }
+
                 const logHtml = (data.log || []).map(l => {
                     let color = '#94a3b8';
                     if (l.startsWith('[ERR]') || l.startsWith('[FATAL]') || l.toLowerCase().includes('error') || l.toLowerCase().includes('failed')) color = '#fca5a5';
@@ -8528,7 +8540,7 @@ TGT_JDBC="{tgt_jdbc}"
 echo "============================================================" | tee "$LOG"
 echo " UPLOAD (Direct File Method) — $(date '+%Y-%m-%d %H:%M:%S')" | tee -a "$LOG"
 echo "============================================================" | tee -a "$LOG"
-
+{PKG_UPLOAD_SH}
 echo "[1/4] Concurrent Program (afcpprog)..." | tee -a "$LOG"
 for f in "$WORK_DIR"/CON_*.ldt; do
   [ -e "$f" ] || continue
@@ -8593,6 +8605,68 @@ echo "Upload complete! Log saved to: $LOG" | tee -a "$LOG"
         "src_jdbc": src_jdbc,
         "tgt_jdbc": tgt_jdbc
     })
+
+# upload.sh step: backup target user_source -> _before_compile/, then compile *.pks before *.pkb.
+# Any backup failure skips the whole compile. Plain string (not f-string) so bash ${...} stays as is.
+PKG_UPLOAD_SH = r'''
+echo "[PKG] PL/SQL Package (backup -> compile)..." | tee -a "$LOG"
+TS=$(date +%Y%m%d_%H%M%S)
+BK_DIR="$WORK_DIR/_before_compile"
+PKG_OK=1; PKG_NAMES=""; HAS_PKG=0
+for f in "$WORK_DIR"/*.pks "$WORK_DIR"/*.pkb; do
+  [ -e "$f" ] || continue
+  HAS_PKG=1; mkdir -p "$BK_DIR"
+  obj=$(basename "$f"); obj=$(echo "${obj%.*}" | tr '[:lower:]' '[:upper:]')
+  case "$f" in *.pks) typ="PACKAGE";; *) typ="PACKAGE BODY";; esac
+  PKG_NAMES="$PKG_NAMES,'$obj'"
+  cnt=$(sqlplus -S "$DB_USER/$DB_PASS" <<SQLEOF
+SET PAGESIZE 0 FEEDBACK OFF HEADING OFF
+SELECT COUNT(*) FROM user_source WHERE name = '$obj' AND type = '$typ';
+EXIT
+SQLEOF
+)
+  cnt=$(echo "$cnt" | tr -d '[:space:]')
+  case "$cnt" in ''|*[!0-9]*) echo "  !! Read user_source failed: $obj ($typ): $cnt" | tee -a "$LOG"; PKG_OK=0; continue;; esac
+  if [ "$cnt" -eq 0 ]; then echo "  -- $obj ($typ): no existing source (new object)" | tee -a "$LOG"; continue; fi
+  bk="$BK_DIR/${obj}_${typ// /_}_$TS.sql"
+  sqlplus -S "$DB_USER/$DB_PASS" > "$bk" <<SQLEOF
+SET PAGESIZE 0 FEEDBACK OFF HEADING OFF VERIFY OFF ECHO OFF DEFINE OFF TAB OFF LINESIZE 32767 TRIMOUT ON
+SELECT DECODE(line, 1, 'CREATE OR REPLACE ') || RTRIM(text, CHR(10)) FROM user_source WHERE name = '$obj' AND type = '$typ' ORDER BY line;
+SELECT '/' FROM dual;
+EXIT
+SQLEOF
+  got=$(( $(wc -l < "$bk") - 1 ))
+  if [ "$got" -ne "$cnt" ]; then
+    echo "  !! Backup mismatch $obj ($typ): file $got lines vs DB $cnt lines" | tee -a "$LOG"; PKG_OK=0
+  else
+    echo "  OK Backup: $bk ($cnt lines)" | tee -a "$LOG"
+  fi
+done
+if [ "$HAS_PKG" -eq 1 ]; then
+  if [ "$PKG_OK" -ne 1 ]; then
+    echo "  !! Backup failed -- SKIP compiling PKG" | tee -a "$LOG"
+  else
+    for f in "$WORK_DIR"/*.pks "$WORK_DIR"/*.pkb; do
+      [ -e "$f" ] || continue
+      echo "  >> Compiling: $(basename "$f")" | tee -a "$LOG"
+      sqlplus -S "$DB_USER/$DB_PASS" <<SQLEOF 2>&1 | tee -a "$LOG"
+SET DEFINE OFF
+SET SQLBLANKLINES ON
+@"$f"
+SHOW ERRORS
+EXIT
+SQLEOF
+    done
+    echo "  -- Status:" | tee -a "$LOG"
+    sqlplus -S "$DB_USER/$DB_PASS" <<SQLEOF 2>&1 | tee -a "$LOG"
+SET PAGESIZE 0 FEEDBACK OFF HEADING OFF LINESIZE 200
+SELECT '     ' || RPAD(object_name, 40) || RPAD(object_type, 14) || status FROM user_objects
+ WHERE object_name IN (${PKG_NAMES#,}) AND object_type IN ('PACKAGE', 'PACKAGE BODY') ORDER BY object_name, object_type;
+EXIT
+SQLEOF
+  fi
+fi
+'''
 
 _PLSQL_SRC_TYPES = {
     'PACKAGE':   [('PACKAGE', 'pks'), ('PACKAGE BODY', 'pkb')],
@@ -8665,6 +8739,57 @@ def _write_plsql_source(cursor, owner, name, obj_type, out_dir, log_lines, downl
             f.write("CREATE OR REPLACE " + "".join(lines).rstrip() + "\n/\n")
         downloaded.append(fname)
         log_lines.append(f"  ✓ Saved {src_type}: {fname} ({len(lines)} lines)")
+
+_PLSQL_HEAD_RE = re.compile(r'^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:NON)?EDITIONABLE\s+)?'
+                            r'(PACKAGE\s+BODY|PACKAGE|PROCEDURE|FUNCTION)\s+(?:"?\w+"?\s*\.\s*)?"?([\w$#]+)"?', re.I)
+
+def _compile_plsql_files(profile, alias, plsql_files):
+    """Compile [(filename, code)] on the target: backup ALL existing sources first (no backup = no compile),
+    specs before bodies, then report user_errors. Returns log lines."""
+    log = ["\n--- [PKG] Backup -> Compile on " + alias + " ---"]
+    items = []
+    for fname, code in plsql_files:
+        m = _PLSQL_HEAD_RE.match(code)
+        if not m:
+            log.append(f"  ✗ {fname}: ไม่พบ CREATE [OR REPLACE] PACKAGE/PROCEDURE/FUNCTION — ข้าม")
+            continue
+        obj_type = re.sub(r'\s+', ' ', m.group(1).upper())
+        items.append((0 if obj_type != 'PACKAGE BODY' else 1, fname, m.group(2).upper(), obj_type, code))
+    if not items:
+        return log
+    items.sort()
+    try:
+        conn = create_connection(profile["host"], profile["port"], profile.get("service_name"), profile.get("sid"),
+                                 profile["user"], profile["password"])
+    except Exception as e:
+        return log + [f"  ✗ Connect DB ไม่ได้ — ไม่ได้ compile: {e}"]
+    cursor = conn.cursor()
+    try:
+        for _, fname, name, obj_type, _ in items:
+            try:
+                log.append(f"  🛡️ {name} ({obj_type}): " + _backup_old_source(cursor, alias, name, obj_type))
+            except Exception as be:
+                return log + [f"  ✗ Backup ล้มเหลว {name} ({obj_type}): {be}", "  ✗ ยกเลิก Compile PKG ทั้งหมด"]
+        for _, fname, name, obj_type, code in items:
+            sql = code.strip()
+            if sql.endswith('/'):
+                sql = sql[:-1].rstrip()
+            try:
+                cursor.execute(sql)
+            except Exception as ce:
+                log.append(f"  ⚠️ {fname}: {ce}")
+            cursor.execute("SELECT line, position, text FROM user_errors WHERE name = :n AND type = :t ORDER BY sequence",
+                           n=name, t=obj_type)
+            errs = cursor.fetchall()
+            if errs:
+                log.append(f"  ✗ {name} ({obj_type}): {len(errs)} error(s)")
+                log.extend(f"     L{l}:{c} {t.strip()}" for l, c, t in errs[:20])
+            else:
+                log.append(f"  ✓ Compiled {name} ({obj_type})")
+    finally:
+        cursor.close()
+        conn.close()
+    return log
 
 def _extract_pkg_files_to_dir(prog, app_short, out_dir, profile_key, db_sess, profs, extra_pkgs=None):
     log_lines, downloaded = [], []
@@ -10148,6 +10273,13 @@ def api_fndload_upload_folder():
     if not target_profile or not files:
         return jsonify({"success": False, "error": "Missing profile or files"})
 
+    # PROD guard: compiling PKG on PROD needs the target DB password (same rule as /api/plsql/compile)
+    tgt = load_saved_profiles().get("profiles", {}).get(target_profile) or db_sessions.get(target_profile) or {}
+    has_plsql = any((f.filename or "").lower().endswith((".pks", ".pkb")) for f in files)
+    if has_plsql and _is_prod_alias(tgt.get("alias") or target_profile) and request.form.get("prod_password") != tgt.get("password"):
+        return jsonify({"success": False, "need_confirm": True, "is_prod": True, "target": target_profile,
+                        "error": f"⚠️ {target_profile} เป็น PROD — ต้องใส่รหัสผ่าน DB ก่อน Compile PKG"})
+
     host = _get_app_server_host(target_profile)
     if not host:
         return jsonify({"success": False, "error": f"Cannot determine SSH host for profile: {target_profile}"})
@@ -10170,6 +10302,8 @@ def api_fndload_upload_folder():
 
         app_short = "XXCUST"
         ds_code = ""
+        prog_name = ""
+        plsql_files = []
 
         for f in files:
             if not f.filename: continue
@@ -10194,6 +10328,9 @@ def api_fndload_upload_folder():
             remote_file = f"{remote_tmp}/{f.filename}"
             sftp.put(local_temp_path, remote_file)
             log_lines.append(f"Uploaded: {f.filename}")
+            if f.filename.lower().endswith(('.pks', '.pkb')):
+                with open(local_temp_path, encoding='utf-8', errors='replace') as pf:
+                    plsql_files.append((f.filename, pf.read()))
             try:
                 os.remove(local_temp_path)
             except Exception:
@@ -10255,9 +10392,8 @@ def api_fndload_upload_folder():
             f"-FILE_NAME \"$f\" -CUSTOM_MODE FORCE; "
             f"done", timeout=300)
 
-        run(f"cd {remote_tmp} && for f in *.pks *.pkb *.sql; do [ -e \"$f\" ] || continue; "
-            f"echo \"exit\" | sqlplus -S apps/{apps_pass} @\"$f\"; "
-            f"done")
+        if plsql_files:
+            log_lines.extend(_compile_plsql_files(p, p.get("alias") or target_profile, plsql_files))
 
         run(f"cd {remote_tmp} && for f in GROUP_*.ldt; do [ -e \"$f\" ] || continue; "
             f"$FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y UPLOAD $FND_TOP/patch/115/import/afcpreqg.lct \"$f\" UPLOAD_MODE=REPLACE CUSTOM_MODE=FORCE; "
