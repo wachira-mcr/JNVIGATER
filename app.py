@@ -121,6 +121,8 @@ def log_activity(response):
             "status": "SUCCESS" if j.get("success") and not j.get("failed") else "FAILED",
             "detail": str(j.get("message") or j.get("error") or (f"ไม่สำเร็จ {j['failed']} รายการ" if j.get("failed") else ""))[:500],
         }
+        if request.path == "/api/fndload/deploy_local":  # enough to deploy the same folder again from the Activity Log
+            entry["rerun"] = {"folder": body.get("folder", ""), "target_profile": tgt_key, "backup_fnd": bool(body.get("backup_fnd"))}
         with _activity_lock, open(ACTIVITY_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception as e:
@@ -138,7 +140,11 @@ def get_activity_log():
                 except ValueError:
                     pass
     rows.reverse()  # newest first
-    return jsonify({"success": True, "items": rows[:2000], "sites": sorted({r["site"] for r in rows})})
+    rows = rows[:2000]
+    for r in rows:
+        if r.get("rerun"):
+            r["rerun"]["exists"] = os.path.isdir(r["rerun"].get("folder") or "")  # gone when "keep files" was off
+    return jsonify({"success": True, "items": rows, "sites": sorted({r["site"] for r in rows})})
 
 if getattr(sys, 'frozen', False):
     SAVED_PROFILES_FILE = os.path.join(os.path.dirname(sys.executable), "saved_profiles.json")
@@ -1661,14 +1667,19 @@ def _save_backup(cursor, alias, obj_name, obj_type, ddl):
         f.write(ddl)
     if not os.path.getsize(path):
         raise Exception(f"ไฟล์ backup ว่าง: {path}")
+    return _git_push_backup(rel, f"Backup {alias} {obj_name} {obj_type} before compile {ts:%Y-%m-%d %H:%M:%S}")
 
+def _git_push_backup(rel, message):
+    """git add <rel> (file or folder) in the backup repo, commit and push. Returns a status note (never raises on git errors)."""
+    import os, subprocess
+    path = os.path.join(PLSQL_BACKUP_REPO, rel)
     if not os.path.isdir(os.path.join(PLSQL_BACKUP_REPO, ".git")):
         return f"Backup: {path} (ยังไม่ได้ push — โฟลเดอร์ไม่ใช่ git clone)"
     git = lambda *a: subprocess.run(["git", "-c", "user.name=JNavigator Auto", "-c", "user.email=auto@jnavigator.local", *a],
                                     cwd=PLSQL_BACKUP_REPO, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     git("pull", "--rebase", "--autostash")
     git("add", rel)
-    commit = git("commit", "-m", f"Backup {alias} {obj_name} {obj_type} before compile {ts:%Y-%m-%d %H:%M:%S}")
+    commit = git("commit", "-m", message)
     if commit.returncode != 0:
         err_msg = (commit.stderr or commit.stdout or "commit failed").strip()
         return f"Backup: {path} ⚠️ commit ไม่ผ่าน: {err_msg[-200:]}"
@@ -3870,7 +3881,14 @@ HTML_TEMPLATE = r"""
                 <div id="fndStatusMsg" style="display:none; flex-shrink:0; border-radius:6px; font-size:0.83rem;"></div>
             </div>
             <div class="modal-footer" style="padding: 12px 20px; display:flex; align-items:center; justify-content:space-between; border-top:1px solid var(--panel-border); background:var(--bg-elevated); flex-shrink:0;">
-                <span id="fndNotice" style="font-size:0.75rem; color:var(--text-muted);">จะสร้างโฟลเดอร์แยกตามชื่อ Program ให้อัตโนมัติ</span>
+                <div style="display:flex; flex-direction:column; gap:2px;">
+                    <label style="font-size:0.78rem; cursor:pointer;" title="ใช้กับปุ่ม ⚡ Download + Upload: ดาวน์โหลด FND ที่มีอยู่บนปลายทางเก็บไว้ใน Backup Repo ก่อนอัปโหลด — ไม่พบ = ข้าม">
+                        <input type="checkbox" id="fndBackupFnd" checked> 🛡️ Backup FND ปลายทางก่อน Upload
+                    </label>
+                    <label style="font-size:0.78rem; cursor:pointer;" title="ใช้กับปุ่ม ⚡ Download + Upload: ไม่ติ๊ก = ลบโฟลเดอร์ในเครื่องหลัง Deploy สำเร็จทุกรายการ (ถ้ามีรายการพังจะเก็บไว้)">
+                        <input type="checkbox" id="fndKeepLocal" checked> 💾 เก็บไฟล์ไว้ในเครื่องหลัง Upload
+                    </label>
+                </div>
                 <div style="display:flex; gap:8px;">
                     <button class="btn btn-secondary" onclick="closeFndLoadModal()">ยกเลิก</button>
                     <button class="btn btn-primary" id="btnSubmitFnd" onclick="submitFndLoadGenerate()">สร้างไฟล์ FNDLOAD</button>
@@ -3881,6 +3899,17 @@ HTML_TEMPLATE = r"""
     </div>
 
     
+    <!-- MODAL: re-run an FNDLOAD deploy from the Activity Log -->
+    <div class="modal-backdrop" id="activityRerunModal" style="z-index: 10460;">
+        <div class="modal-content" style="width: 720px; max-width: 95vw; max-height: 90vh; background:var(--bg-surface); border:1px solid var(--panel-border); border-radius:8px; box-shadow: 0 16px 36px rgba(0,0,0,0.6); overflow:hidden; display:flex; flex-direction:column;">
+            <div class="modal-header" style="padding: 12px 18px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--panel-border); background:var(--bg-elevated); flex-shrink:0;">
+                <span style="font-weight:600; font-size:0.92rem; color:var(--text-bright);">🔄 Rerun FNDLOAD Deploy</span>
+                <button style="background:none; border:none; color:var(--text-muted); font-size:1.2rem; cursor:pointer; padding:2px 6px;" onclick="document.getElementById('activityRerunModal').style.display = 'none'">✖</button>
+            </div>
+            <div id="activityRerunBody" style="padding: 14px 20px; overflow-y:auto; flex:1; font-size:0.82rem;"></div>
+        </div>
+    </div>
+
     <!-- MODAL: FNDLOAD Batch (several concurrent programs) -->
     <div class="modal-backdrop" id="fndBatchModal" style="z-index: 10450;">
         <div class="modal-content" style="width: 760px; max-width: 95vw; max-height: 90vh; background:var(--bg-surface); border:1px solid var(--panel-border); border-radius:8px; box-shadow: 0 16px 36px rgba(0,0,0,0.6); overflow:hidden; display:flex; flex-direction:column;">
@@ -3889,38 +3918,40 @@ HTML_TEMPLATE = r"""
                 <button style="background:none; border:none; color:var(--text-muted); font-size:1.2rem; cursor:pointer; padding:2px 6px;" onclick="closeFndBatchModal()">✖</button>
             </div>
             <div style="padding: 14px 20px; display:flex; flex-direction:column; gap:10px; overflow-y:auto; flex:1;">
-                <div style="flex-shrink:0;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-                        <label style="font-size:0.76rem; font-weight:500; color:var(--text-muted);">เลือก Program จากผลค้นหา Concurrent:</label>
-                        <label style="font-size:0.74rem; color:var(--text-muted); cursor:pointer;"><input type="checkbox" onchange="document.querySelectorAll('#fndBatchList .fnd-batch-prog').forEach(c => c.checked = this.checked)"> เลือกทั้งหมด</label>
-                    </div>
-                    <div id="fndBatchList" style="max-height:180px; overflow-y:auto; border:1px solid var(--panel-border); border-radius:6px; padding:6px 10px; background:var(--bg-dark); font-size:0.8rem;"></div>
-                </div>
-                <div style="flex-shrink:0;">
-                    <label style="font-size:0.76rem; font-weight:500; color:var(--text-muted); display:block; margin-bottom:4px;">เพิ่ม Concurrent Short Name เอง (บรรทัดละตัว หรือคั่นด้วย , ):</label>
-                    <textarea id="fndBatchExtra" rows="2" style="width:100%; font-family:monospace; font-size:0.8rem;" placeholder="PYTPO_QUOTATION_OUTBOUND&#10;PT_GL_REVPKG_TRANSFROM"></textarea>
-                </div>
                 <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; flex-shrink:0;">
                     <div>
                         <label style="font-size:0.76rem; font-weight:500; color:var(--success); display:block; margin-bottom:4px;">Source DB Site (Download จาก):</label>
-                        <select id="fndBatchSrc" style="width:100%; font-weight:600;"></select>
+                        <select id="fndBatchSrc" style="width:100%; font-weight:600;" onchange="fndBatchRecheckAll(true)"></select>
                     </div>
                     <div>
                         <label style="font-size:0.76rem; font-weight:500; color:var(--warning); display:block; margin-bottom:4px;">Target DB Site (Clone ไปยังไซต์ใด):</label>
-                        <select id="fndBatchTgt" style="width:100%; font-weight:600; color:var(--warning);"></select>
+                        <select id="fndBatchTgt" style="width:100%; font-weight:600; color:var(--warning);" onchange="fndBatchRecheckAll(false)"></select>
                     </div>
+                </div>
+                <div style="flex-shrink:0;">
+                    <label style="font-size:0.76rem; font-weight:500; color:var(--text-muted); display:block; margin-bottom:4px;">ค้นหา Concurrent Program (ชื่อ User Concurrent Name หรือ Short Name) บน Source DB:</label>
+                    <div style="display:flex; gap:6px;">
+                        <input type="text" id="fndBatchQ" style="flex:1;" placeholder="เช่น SME Confirm Data หรือ PYTPO_QUOTATION" onkeydown="if (event.key === 'Enter') searchFndBatch()">
+                        <button class="btn" onclick="searchFndBatch()">🔍 ค้นหา</button>
+                    </div>
+                    <div id="fndBatchResults" style="margin-top:6px; max-height:170px; overflow-y:auto; border:1px solid var(--panel-border); border-radius:6px; padding:4px 8px; background:var(--bg-dark); font-size:0.8rem;"></div>
+                </div>
+                <div style="flex-shrink:0;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                        <label style="font-size:0.78rem; font-weight:600; color:var(--text-main);">โปรแกรมที่เลือก (<span id="fndBatchCount">0</span>) — ตรวจ PKG และ Table / View ให้ทุกตัว ติ๊กเลือกได้เหมือนหน้าเดี่ยว</label>
+                        <a href="javascript:void(0)" onclick="clearFndBatchSel()" style="font-size:0.74rem; color:var(--text-muted);">ล้างทั้งหมด</a>
+                    </div>
+                    <div id="fndBatchSelected" style="display:flex; flex-direction:column; gap:8px;"></div>
                 </div>
                 <div style="flex-shrink:0;">
                     <label style="font-size:0.76rem; font-weight:500; color:var(--text-muted); display:block; margin-bottom:4px;">Output Directory:</label>
                     <input type="text" id="fndBatchOutDir" style="width:100%;" value="C:\Users\MBx13\Desktop\GEN_FND">
                 </div>
                 <div style="display:flex; flex-wrap:wrap; gap:6px 18px; font-size:0.8rem; flex-shrink:0;">
-                    <label style="cursor:pointer;"><input type="checkbox" id="fndBatchDeps" checked> รวม PKG พ่วง (Custom) อัตโนมัติ</label>
-                    <label style="cursor:pointer;"><input type="checkbox" id="fndBatchObjs" checked> รวม Table / View (Custom) ที่ไม่ตรงกับปลายทาง</label>
-                </div>
-                <div style="display:flex; flex-wrap:wrap; gap:6px 18px; font-size:0.8rem; flex-shrink:0;">
                     <label style="cursor:pointer;"><input type="radio" name="fndBatchMode" value="download" checked> 📥 สร้างสคริปต์ + ดึงไฟล์ลงเครื่อง</label>
                     <label style="cursor:pointer; color:#4ade80;"><input type="radio" name="fndBatchMode" value="upload"> ⚡ ดึงไฟล์ + Upload / Deploy ไปปลายทาง</label>
+                    <label style="cursor:pointer;" title="ดาวน์โหลด FND ที่มีอยู่บนปลายทางเก็บไว้ใน Backup Repo ก่อนอัปโหลด — ไม่พบ = ข้าม"><input type="checkbox" id="fndBatchBackupFnd" checked> 🛡️ Backup FND ปลายทางก่อน Upload</label>
+                    <label style="cursor:pointer;" title="ใช้กับโหมด Upload: ไม่ติ๊ก = ลบโฟลเดอร์ในเครื่องของตัวที่ Deploy สำเร็จทุกรายการ (ตัวที่มีรายการพังจะเก็บไว้)"><input type="checkbox" id="fndBatchKeepLocal" checked> 💾 เก็บไฟล์ไว้ในเครื่องหลัง Upload</label>
                 </div>
                 <div id="fndBatchProgress" style="display:none; flex-shrink:0; font-size:0.8rem;"></div>
             </div>
@@ -3956,6 +3987,10 @@ HTML_TEMPLATE = r"""
                     <select class="form-control" id="fndUploadTargetSite" style="width:100%; background:#1e293b; color:#f8fafc; border:1px solid #38bdf8; padding:8px 10px; border-radius:4px; font-weight:600;"></select>
                     <div style="font-size:0.75rem; color:#38bdf8; margin-top:4px;">⚡ ระบบเลือกไซต์ที่กำลังเชื่อมต่ออยู่ให้เป็นค่าเริ่มต้นโดยอัตโนมัติ</div>
                 </div>
+
+                <label style="font-size:0.82rem; cursor:pointer;" title="ดาวน์โหลด CON / XML / Template / Request Group ที่มีอยู่บนปลายทางเก็บไว้ใน Backup Repo ก่อนอัปโหลด — ถ้าไม่พบบนปลายทางจะข้ามไป">
+                    <input type="checkbox" id="fndUploadBackupFnd" checked> 🛡️ Backup FND ปลายทางก่อนอัปโหลด (ไม่พบ = ข้าม)
+                </label>
 
                 <!-- Status & Live Log Box -->
                 <div id="fndUploadStatusMsg" style="display:none; max-height:280px; overflow-y:auto; border-radius:6px; font-size:0.83rem;"></div>
@@ -4100,12 +4135,51 @@ HTML_TEMPLATE = r"""
                 wrapper.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-muted);">ยังไม่มีประวัติ Compile / Upload</div>';
                 return;
             }
-            wrapper.innerHTML = `<table class="data-grid"><thead><tr><th>Time</th><th>Site</th><th>DB</th><th>User</th><th>Action</th><th>Object / File</th><th>Status</th><th>Detail</th></tr></thead><tbody>` +
+            const rerunCell = r => !r.rerun ? '' : r.rerun.exists
+                ? `<button class="btn btn-secondary" style="padding:2px 8px; font-size:0.72rem; white-space:nowrap;" onclick="rerunActivity(${activityLogItems.indexOf(r)})" title="Deploy โฟลเดอร์เดิมไป ${escapeHtml(r.rerun.target_profile || '')} อีกครั้ง">🔄 Rerun</button>`
+                : `<span style="font-size:0.7rem; color:var(--text-muted);" title="${escapeHtml(r.rerun.folder)}">ไฟล์ถูกลบแล้ว</span>`;
+            wrapper.innerHTML = `<table class="data-grid"><thead><tr><th></th><th>Time</th><th>Site</th><th>DB</th><th>User</th><th>Action</th><th>Object / File</th><th>Status</th><th>Detail</th></tr></thead><tbody>` +
                 rows.map(r => `<tr>
+                    <td>${rerunCell(r)}</td>
                     <td>${escapeHtml(r.time)}</td><td>${escapeHtml(r.site)}</td><td>${escapeHtml(r.db)}</td><td>${escapeHtml(r.user)}</td>
                     <td>${escapeHtml(r.action)}</td><td>${escapeHtml(r.object)}</td>
                     <td style="color:${r.status === 'SUCCESS' ? '#4ec9b0' : '#f14c4c'}; font-weight:600;">${r.status}</td>
                     <td style="white-space:pre-wrap; max-width:520px;">${escapeHtml(r.detail)}</td></tr>`).join('') + '</tbody></table>';
+        }
+
+        // Deploy the same local folder to the same target again (FNDLOAD entries made by ⚡ Download + Upload / Batch)
+        async function rerunActivity(idx, prodPassword) {
+            const r = activityLogItems[idx];
+            if (!r || !r.rerun) return;
+            const { folder, target_profile, backup_fnd } = r.rerun;
+            const body = document.getElementById('activityRerunBody');
+            if (prodPassword === undefined && !confirm(`Deploy โฟลเดอร์เดิมอีกครั้ง?\n\n${folder}\n→ ${target_profile}\n\n(Table / View / PKG เดิมบนปลายทางจะถูก Backup ก่อนรันทุกครั้ง; ตัวที่สร้างไปแล้วจะถูกข้าม)`)) return;
+            document.getElementById('activityRerunModal').style.display = 'flex';
+            body.innerHTML = `<div style="color:#93c5fd;">⏳ กำลังอัปโหลด + Deploy <b>${escapeHtml(folder)}</b> ไปยัง <b>${escapeHtml(target_profile)}</b>...</div>`;
+            try {
+                const data = await (await fetch('/api/fndload/deploy_local', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folder, target_profile, backup_fnd, prod_password: prodPassword })
+                })).json();
+                if (data.need_confirm) {
+                    const pw = prompt(data.error + "\nกรอกรหัสผ่าน DB PROD:");
+                    if (pw === null) { body.innerHTML = '<div style="color:var(--warning);">ยกเลิก — ไม่ได้ Deploy ลง PROD</div>'; return; }
+                    return rerunActivity(idx, pw);
+                }
+                if (data.error === 'NOT_CONFIGURED') {
+                    body.innerHTML = `<div style="color:#d29922;">⚠️ ยังไม่ได้ตั้งรหัส SSH ของ Server ปลายทาง: <b>${escapeHtml(data.host || '')}</b></div>`;
+                    showSftpAuthPrompt(data.host || '', () => rerunActivity(idx, prodPassword));
+                    return;
+                }
+                const folderName = folder.replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
+                body.innerHTML = data.success
+                    ? renderFndUploadResult(data, target_profile, folderName).html
+                    : `<div style="color:#f85149; font-weight:600; margin-bottom:6px;">❌ ${escapeHtml(data.error || 'Deploy ไม่สำเร็จ')}</div>` +
+                      (data.log && data.log.length ? `<details open><summary style="cursor:pointer; color:var(--text-muted);">ดู Log</summary><div style="max-height:260px; overflow-y:auto; background:var(--bg-dark); padding:8px; border-radius:4px;">${fndUploadLogHtml(data.log)}</div></details>` : '');
+            } catch (e) {
+                body.innerHTML = `<div style="color:#f85149;">❌ Network Error: ${escapeHtml(e.message)}</div>`;
+            }
+            loadActivityLog();  // the rerun is logged as a new row
         }
 
         let tnsData = [];
@@ -6385,7 +6459,7 @@ HTML_TEMPLATE = r"""
             const summaryHtml = steps.map(s => `
                 <div style="margin-top:6px; font-weight:600; color:#38bdf8;">${escapeHtml(s)}</div>` +
                 results.filter(r => r.step === s).map(r => `
-                <div style="padding-left:10px; color:${r.ok ? '#6ee7b7' : '#fca5a5'};">${r.ok ? '✓' : '✗'} <code>${escapeHtml(r.file)}</code>${r.note ? ` — <span style="color:#fca5a5;">${escapeHtml(r.note)}</span>` : ''}</div>`).join('')
+                <div style="padding-left:10px; color:${r.ok ? '#6ee7b7' : '#fca5a5'};">${r.ok ? '✓' : '✗'} <code>${escapeHtml(r.file)}</code>${r.note ? ` — <span style="color:${r.ok ? 'var(--text-muted)' : '#fca5a5'};">${escapeHtml(r.note)}</span>` : ''}</div>`).join('')
             ).join('') || '<div style="color:var(--text-muted);">ไม่พบไฟล์ที่ต้อง Deploy (CON_/XML_/.rtf/.pks/.pkb/GROUP_)</div>';
             const ok = failed === 0;
             const html = `
@@ -6425,6 +6499,7 @@ HTML_TEMPLATE = r"""
 
             const formData = new FormData();
             formData.append('target_profile', targetSite);
+            formData.append('backup_fnd', document.getElementById('fndUploadBackupFnd').checked ? '1' : '0');
             if (typeof prodPassword === 'string') formData.append('prod_password', prodPassword);
             for (let i = 0; i < pendingFndFiles.length; i++) {
                 formData.append('files', pendingFndFiles[i], pendingFndFiles[i].name);
@@ -6574,20 +6649,7 @@ HTML_TEMPLATE = r"""
                 }
                 let html = appFix + `<div style="font-weight:600; color:var(--accent-blue); margin-bottom:4px;">📦 ${escapeHtml(d.object_type)}: ${escapeHtml(d.owner)}.${escapeHtml(d.name)}</div>
                     <div style="color:var(--text-muted); font-size:0.76rem; margin-bottom:6px;">จะดึง DDL ของ PKG นี้ (.pks / .pkb) มาด้วยอัตโนมัติ</div>`;
-                if (d.deps.length) {
-                    html += `<div style="margin:6px 0 4px; color:var(--text-main);">พบ PKG ที่ถูกเรียกใช้ภายใน <b>${d.deps.length}</b> ตัว — ต้องการโหลด DDL มาด้วยหรือไม่?</div>
-                        <div style="max-height:140px; overflow-y:auto; display:flex; flex-direction:column; gap:2px;">` +
-                        d.deps.map(p => {
-                            const full = `${p.owner}.${p.name}`;
-                            return `<label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
-                                <input type="checkbox" class="fnd-dep-pkg" value="${escapeHtml(full)}" ${p.standard ? '' : 'checked'}>
-                                <span>${escapeHtml(full)}</span>
-                                ${p.standard ? '<span style="font-size:0.7rem; color:var(--text-muted);">(EBS Standard)</span>' : '<span style="font-size:0.7rem; color:var(--success);">(Custom)</span>'}
-                            </label>`;
-                        }).join('') + `</div>`;
-                } else {
-                    html += `<div style="color:var(--text-muted); font-size:0.76rem;">ไม่พบ PKG อื่นที่ถูกเรียกใช้ภายใน</div>`;
-                }
+                html += fndDepsListHtml(d.deps);
                 window._fndPkgMain = `${d.owner}.${d.name}`;
                 html += `<div style="border-top:1px dashed var(--panel-border); margin-top:8px; padding-top:8px;">
                         <button class="btn btn-secondary" style="font-size:0.76rem; padding:4px 10px;" onclick="checkFndObjects()">🔍 ตรวจสอบ Table / View (ต้นทาง ↔ ปลายทาง)</button>
@@ -6618,33 +6680,53 @@ HTML_TEMPLATE = r"""
                 });
                 const d = await res.json();
                 if (!d.success) { box.innerHTML = `<span style="color:var(--warning);">ตรวจสอบไม่ได้: ${escapeHtml(d.error || '')}</span>`; return; }
-                if (!d.objects.length) { box.innerHTML = '<span style="color:var(--text-muted);">ไม่พบ Table / View ที่ PKG เรียกใช้</span>'; return; }
-                const badge = { SAME: ['✅ เหมือนกัน', 'var(--success)'], MISSING: ['❌ ไม่มีในปลายทาง', '#f85149'], DIFF: ['⚠️ ต่างกัน', 'var(--warning)'] };
-                const row = o => {
-                    const [label, color] = badge[o.status];
-                    const val = escapeHtml(JSON.stringify({ owner: o.owner, name: o.name, type: o.type, synonym: o.synonym }));
-                    return `<div style="padding:2px 0;">
-                        <label style="display:flex; align-items:center; gap:6px; cursor:${o.status === 'SAME' ? 'default' : 'pointer'};">
-                            <input type="checkbox" class="fnd-sync-obj" value="${val}" ${o.status === 'SAME' ? 'disabled' : (o.standard ? '' : 'checked')}>
-                            <span style="font-size:0.7rem; color:var(--text-muted); min-width:34px;">${o.type}</span>
-                            <span>${escapeHtml(o.owner)}.${escapeHtml(o.name)}</span>
-                            <span style="font-size:0.72rem; color:${color};">${label}</span>
-                        </label>
-                        ${o.diffs.length ? `<div style="padding-left:46px; font-size:0.7rem; color:var(--text-muted);">${o.diffs.slice(0, 8).map(escapeHtml).join('<br>')}${o.diffs.length > 8 ? `<br>... อีก ${o.diffs.length - 8} รายการ` : ''}</div>` : ''}
-                    </div>`;
-                };
-                const custom = d.objects.filter(o => !o.standard), std = d.objects.filter(o => o.standard);
-                const notSame = arr => arr.filter(o => o.status !== 'SAME').length;
-                box.innerHTML = `
-                    <div style="margin-bottom:4px; color:var(--text-main);">พบ Table / View <b>${d.objects.length}</b> ตัว — ไม่ตรงกัน <b style="color:var(--warning);">${notSame(d.objects)}</b> ตัว. ติ๊กตัวที่ต้องการสร้างสคริปต์อัปโหลดไปปลายทาง:</div>
-                    <div style="max-height:180px; overflow-y:auto;">
-                        ${custom.map(row).join('') || '<div style="color:var(--text-muted);">ไม่มี Custom Table / View</div>'}
-                        ${std.length ? `<details style="margin-top:4px;"><summary style="cursor:pointer; color:var(--text-muted); font-size:0.74rem;">EBS Standard ${std.length} ตัว (ไม่ตรง ${notSame(std)}) — ไม่แนะนำให้ sync</summary>${std.map(row).join('')}</details>` : ''}
-                    </div>
-                    <div style="font-size:0.7rem; color:var(--text-muted); margin-top:4px;">ไม่มีในปลายทาง = CREATE TABLE / VIEW • ต่างกัน = ALTER TABLE ADD/MODIFY คอลัมน์ หรือ CREATE OR REPLACE VIEW (ไม่ลบคอลัมน์ที่มีเฉพาะปลายทาง, ไม่รวม Index)</div>`;
+                box.innerHTML = fndObjectsHtml(d.objects);
             } catch (e) {
                 box.innerHTML = `<span style="color:var(--warning);">ตรวจสอบไม่ได้: ${escapeHtml(e.message)}</span>`;
             }
+        }
+
+        // Shared by the single popup and Batch cards: tickable dependent-PKG list (custom pre-ticked)
+        function fndDepsListHtml(deps) {
+            if (!deps.length) return `<div style="color:var(--text-muted); font-size:0.76rem;">ไม่พบ PKG อื่นที่ถูกเรียกใช้ภายใน</div>`;
+            return `<div style="margin:6px 0 4px; color:var(--text-main);">พบ PKG ที่ถูกเรียกใช้ภายใน <b>${deps.length}</b> ตัว — ต้องการโหลด DDL มาด้วยหรือไม่?</div>
+                <div style="max-height:140px; overflow-y:auto; display:flex; flex-direction:column; gap:2px;">` +
+                deps.map(p => {
+                    const full = `${p.owner}.${p.name}`;
+                    return `<label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                        <input type="checkbox" class="fnd-dep-pkg" value="${escapeHtml(full)}" ${p.standard ? '' : 'checked'}>
+                        <span>${escapeHtml(full)}</span>
+                        ${p.standard ? '<span style="font-size:0.7rem; color:var(--text-muted);">(EBS Standard)</span>' : '<span style="font-size:0.7rem; color:var(--success);">(Custom)</span>'}
+                    </label>`;
+                }).join('') + `</div>`;
+        }
+
+        // Shared by the single popup and Batch cards: tickable Table/View compare result (custom mismatches pre-ticked)
+        function fndObjectsHtml(objects) {
+            if (!objects.length) return '<span style="color:var(--text-muted);">ไม่พบ Table / View ที่ PKG เรียกใช้</span>';
+            const badge = { SAME: ['✅ เหมือนกัน', 'var(--success)'], MISSING: ['❌ ไม่มีในปลายทาง', '#f85149'], DIFF: ['⚠️ ต่างกัน', 'var(--warning)'] };
+            const row = o => {
+                const [label, color] = badge[o.status];
+                const val = escapeHtml(JSON.stringify({ owner: o.owner, name: o.name, type: o.type, synonym: o.synonym }));
+                return `<div style="padding:2px 0;">
+                    <label style="display:flex; align-items:center; gap:6px; cursor:${o.status === 'SAME' ? 'default' : 'pointer'};">
+                        <input type="checkbox" class="fnd-sync-obj" value="${val}" ${o.status === 'SAME' ? 'disabled' : (o.standard ? '' : 'checked')}>
+                        <span style="font-size:0.7rem; color:var(--text-muted); min-width:62px;">${o.type}</span>
+                        <span>${escapeHtml(o.owner)}.${escapeHtml(o.name)}</span>
+                        <span style="font-size:0.72rem; color:${color};">${label}</span>
+                    </label>
+                    ${o.diffs.length ? `<div style="padding-left:46px; font-size:0.7rem; color:var(--text-muted);">${o.diffs.slice(0, 8).map(escapeHtml).join('<br>')}${o.diffs.length > 8 ? `<br>... อีก ${o.diffs.length - 8} รายการ` : ''}</div>` : ''}
+                </div>`;
+            };
+            const custom = objects.filter(o => !o.standard), std = objects.filter(o => o.standard);
+            const notSame = arr => arr.filter(o => o.status !== 'SAME').length;
+            return `
+                <div style="margin-bottom:4px; color:var(--text-main);">พบ Table / View <b>${objects.length}</b> ตัว — ไม่ตรงกัน <b style="color:var(--warning);">${notSame(objects)}</b> ตัว. ติ๊กตัวที่ต้องการสร้างสคริปต์อัปโหลดไปปลายทาง:</div>
+                <div style="max-height:180px; overflow-y:auto;">
+                    ${custom.map(row).join('') || '<div style="color:var(--text-muted);">ไม่มี Custom Table / View</div>'}
+                    ${std.length ? `<details style="margin-top:4px;"><summary style="cursor:pointer; color:var(--text-muted); font-size:0.74rem;">EBS Standard ${std.length} ตัว (ไม่ตรง ${notSame(std)}) — ไม่แนะนำให้ sync</summary>${std.map(row).join('')}</details>` : ''}
+                </div>
+                <div style="font-size:0.7rem; color:var(--text-muted); margin-top:4px;">ไม่มีในปลายทาง = CREATE TABLE / VIEW / SEQUENCE • ต่างกัน = ALTER TABLE ADD/MODIFY คอลัมน์ หรือ CREATE OR REPLACE VIEW (ไม่ลบคอลัมน์ที่มีเฉพาะปลายทาง, ไม่รวม Index) • ลำดับตอน Deploy: Sequence → Table → View → PKG</div>`;
         }
 
         function getFndSyncObjs() {
@@ -6883,6 +6965,27 @@ HTML_TEMPLATE = r"""
             }
         }
 
+        // What happened to the local folder after deploy_local (only reported when "keep files" was unticked)
+        function fndLocalNote(data, folder) {
+            if (data.local_deleted) return `<div style="margin-top:6px; font-size:0.74rem; color:var(--text-muted);">🗑️ ลบไฟล์ในเครื่องแล้ว (ไม่เลือกเก็บ): ${escapeHtml(folder || '')}</div>`;
+            if (data.local_kept_reason) return `<div style="margin-top:6px; font-size:0.74rem; color:var(--warning);">💾 เก็บไฟล์ไว้ในเครื่อง — ${escapeHtml(data.local_kept_reason)}</div>`;
+            return '';
+        }
+
+        function fndRetryButtons() {
+            return `<div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+                <button class="btn btn-primary" style="font-size:0.76rem; padding:4px 10px;" onclick="retryFndDeploy(true)" title="ตรวจ Table / View / Sequence เทียบปลายทางใหม่ → สร้างสคริปต์ → ดึงไฟล์ → Deploy อีกครั้ง">🔄 ตรวจ Table / View / Sequence ใหม่ แล้วรันอีกครั้ง</button>
+                <button class="btn btn-secondary" style="font-size:0.76rem; padding:4px 10px;" onclick="retryFndDeploy(false)" title="ส่งไฟล์ชุดเดิมในเครื่องไป Deploy ซ้ำ (เช่น หลังแก้บนปลายทางเองแล้ว) — ตัวที่มีอยู่แล้วจะถูกข้าม">↻ Deploy ไฟล์เดิมซ้ำ</button>
+            </div>`;
+        }
+
+        async function retryFndDeploy(recheck) {
+            const tgt = document.getElementById('fndTgtDb').value;
+            if (!recheck) return deployFndToTarget(tgt);
+            if (window._fndPkgMain && document.getElementById('fndObjCheck')) await checkFndObjects();
+            return runFndDownloadAndUpload();
+        }
+
         async function deployFndToTarget(tgt, prodPassword) {
             const statusMsg = document.getElementById('fndStatusMsg');
             const folder = window._lastFndFolder;
@@ -6901,7 +7004,8 @@ HTML_TEMPLATE = r"""
                 const res = await fetch('/api/fndload/deploy_local', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ folder: folder, target_profile: tgt, prod_password: prodPassword })
+                    body: JSON.stringify({ folder: folder, target_profile: tgt, prod_password: prodPassword, backup_fnd: document.getElementById('fndBackupFnd').checked,
+                                           delete_after: !document.getElementById('fndKeepLocal').checked })
                 });
                 const data = await res.json();
                 if (data.need_confirm) {
@@ -6918,11 +7022,11 @@ HTML_TEMPLATE = r"""
                     box.innerHTML = `<div style="background:rgba(248, 81, 73, 0.1); border:1px solid rgba(248, 81, 73, 0.3); color:#f85149; padding:12px; border-radius:6px;">
                             <div style="font-weight:600; margin-bottom:4px;">❌ อัปโหลดไม่สำเร็จ: ${escapeHtml(data.error || 'Unknown Error')}</div>
                             ${data.log && data.log.length ? `<details><summary style="cursor:pointer; color:var(--text-muted); font-size:0.72rem;">ดู Log</summary><div style="max-height:180px; overflow-y:auto; background:var(--bg-dark); padding:8px; border-radius:4px;">${fndUploadLogHtml(data.log)}</div></details>` : ''}
-                        </div>`;
+                        </div>` + fndRetryButtons();
                     return;
                 }
                 const { html, ok, failed } = renderFndUploadResult(data, tgt, folderName);
-                box.innerHTML = html;
+                box.innerHTML = html + fndLocalNote(data, folder) + (ok ? '' : fndRetryButtons());
                 box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
                 if (ok) showToast(`Download + Upload ไป ${tgt} สำเร็จ!`, 4000, 'success');
                 else showToast(`Deploy ไม่สำเร็จ ${failed} รายการ — ดูรายละเอียดในหน้าต่าง`, 5000, 'error');
@@ -6931,10 +7035,16 @@ HTML_TEMPLATE = r"""
             }
         }
 
-        // --- FNDLOAD Batch: same endpoints as the single popup, one program at a time ---
+        // --- FNDLOAD Batch: search -> add programs as cards (PKG + Table/View checks like the single popup) -> run one at a time ---
+        const fndBatchSel = new Map();  // short name -> { p: {short, name, app, type}, d: pkg_deps result, ready: Promise of the running checks }
+        const fndPost = (u, b) => fetch('/api/fndload/' + u, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) }).then(r => r.json());
+        const fndBatchCard = short => document.querySelector(`#fndBatchSelected .fnd-batch-card[data-short="${CSS.escape(short)}"]`);
+        const fndMuted = t => `<span style="color:var(--text-muted);">${escapeHtml(t)}</span>`;
+        const fndWarn = t => `<span style="color:var(--warning);">${escapeHtml(t)}</span>`;
+
         async function openFndBatchModal() {
-            const modal = document.getElementById('fndBatchModal');
-            if (window._fndBatchRunning) { modal.style.display = 'flex'; return; }  // keep showing progress
+            document.getElementById('fndBatchModal').style.display = 'flex';
+            if (window._fndBatchRunning || fndBatchSel.size) return;  // keep the current selection / progress
             await loadFndProfilesDropdown();
             const opts = cachedProfilesList.map(k => `<option value="${escapeHtml(k)}">${escapeHtml(k)}</option>`).join('');
             const src = document.getElementById('fndBatchSrc'), tgt = document.getElementById('fndBatchTgt');
@@ -6948,16 +7058,8 @@ HTML_TEMPLATE = r"""
             }
             const uniq = new Map();
             (window._concItems || []).forEach(r => { if (r.program_short_name && !uniq.has(r.program_short_name)) uniq.set(r.program_short_name, r); });
-            document.getElementById('fndBatchList').innerHTML = uniq.size ? [...uniq.values()].map(r => `
-                <label style="display:flex; gap:6px; align-items:center; padding:2px 0; cursor:pointer;">
-                    <input type="checkbox" class="fnd-batch-prog" value="${escapeHtml(JSON.stringify({ short: r.program_short_name, name: r.user_concurrent_program_name || '', app: r.application_short_name || '' }))}">
-                    <code>${escapeHtml(r.program_short_name)}</code>
-                    <span style="color:var(--text-muted);">${escapeHtml(r.user_concurrent_program_name || '')}</span>
-                    <span style="font-size:0.7rem; color:var(--text-muted);">${escapeHtml(r.program_type || '')}</span>
-                </label>`).join('')
-                : '<div style="color:var(--text-muted);">ยังไม่มีผลค้นหา — ค้นหา Concurrent ก่อน หรือพิมพ์ Short Name ด้านล่าง</div>';
+            renderFndBatchResults([...uniq.values()], uniq.size ? 'จากผลค้นหาหน้าหลัก — กด ➕ เพื่อเพิ่ม หรือพิมพ์ชื่อแล้วค้นหาใหม่' : 'พิมพ์ชื่อโปรแกรมแล้วกดค้นหา');
             document.getElementById('fndBatchProgress').style.display = 'none';
-            modal.style.display = 'flex';
         }
 
         function closeFndBatchModal() {
@@ -6965,95 +7067,252 @@ HTML_TEMPLATE = r"""
             if (window._fndBatchRunning) showToast('Batch ยังทำงานต่อเบื้องหลัง — เปิด "ทำหลายตัว (Batch)" อีกครั้งเพื่อดูความคืบหน้า', 4000);
         }
 
+        async function searchFndBatch() {
+            const q = document.getElementById('fndBatchQ').value.trim();
+            const box = document.getElementById('fndBatchResults');
+            if (q.length < 2) { box.innerHTML = fndWarn('พิมพ์อย่างน้อย 2 ตัวอักษร'); return; }
+            box.innerHTML = fndMuted('⏳ กำลังค้นหา...');
+            try {
+                const d = await fndPost('search_programs', { q, src_profile: document.getElementById('fndBatchSrc').value });
+                if (!d.success) { box.innerHTML = fndWarn('ค้นหาไม่ได้: ' + (d.error || '')); return; }
+                renderFndBatchResults(d.programs, d.programs.length
+                    ? `พบ ${d.programs.length} ตัว${d.programs.length >= 50 ? ' (แสดง 50 ตัวแรก — พิมพ์ให้เจาะจงขึ้น)' : ''} — กด ➕ เพื่อเพิ่ม`
+                    : 'ไม่พบโปรแกรม');
+            } catch (e) {
+                box.innerHTML = fndWarn('ค้นหาไม่ได้: ' + e.message);
+            }
+        }
+
+        function renderFndBatchResults(rows, note) {
+            window._fndBatchRows = rows;
+            document.getElementById('fndBatchResults').innerHTML = `<div style="font-size:0.72rem; color:var(--text-muted); padding:2px 0;">${escapeHtml(note)}</div>` + rows.map((r, i) => {
+                const added = fndBatchSel.has(r.program_short_name);
+                return `<div style="display:flex; gap:8px; align-items:center; padding:3px 0; border-top:1px solid var(--panel-border);">
+                    <button class="btn btn-secondary" data-short="${escapeHtml(r.program_short_name)}" style="font-size:0.72rem; padding:2px 8px; white-space:nowrap;" ${added ? 'disabled' : ''} onclick="addFndBatchProg(${i}, this)">${added ? '✓ เพิ่มแล้ว' : '➕ เพิ่ม'}</button>
+                    <code>${escapeHtml(r.program_short_name)}</code>
+                    <span>${escapeHtml(r.user_concurrent_program_name || '')}</span>
+                    <span style="margin-left:auto; font-size:0.7rem; color:var(--text-muted); white-space:nowrap;">${escapeHtml(r.application_short_name || '')} • ${escapeHtml(r.program_type || '')}${r.enabled === false ? ' • Disabled' : ''}</span>
+                </div>`;
+            }).join('');
+        }
+
+        function addFndBatchProg(i, btn) {
+            const r = (window._fndBatchRows || [])[i];
+            if (!r || window._fndBatchRunning || fndBatchSel.has(r.program_short_name)) return;
+            const entry = { p: { short: r.program_short_name, name: r.user_concurrent_program_name || '', app: r.application_short_name || '', type: r.program_type || '' } };
+            fndBatchSel.set(entry.p.short, entry);
+            document.getElementById('fndBatchSelected').insertAdjacentHTML('beforeend', `
+                <div class="fnd-batch-card" data-short="${escapeHtml(entry.p.short)}" style="border:1px solid var(--panel-border); border-radius:6px; padding:8px 10px; background:var(--bg-dark); font-size:0.8rem;">
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <code style="font-weight:600;">${escapeHtml(entry.p.short)}</code>
+                        <span>${escapeHtml(entry.p.name)}</span>
+                        <span style="font-size:0.7rem; color:var(--text-muted);">${escapeHtml(entry.p.type)}</span>
+                        <span class="fnd-batch-st" style="margin-left:auto; font-size:0.76rem;"></span>
+                        <button class="fnd-batch-rm" style="background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:1rem;" title="เอาออก" onclick="removeFndBatchProg(this.closest('.fnd-batch-card').dataset.short)">✖</button>
+                    </div>
+                    <div class="fnd-batch-pkg" style="margin-top:4px;"></div>
+                    <div class="fnd-batch-obj" style="margin-top:6px;"></div>
+                    <div class="fnd-batch-det" style="margin-top:4px;"></div>
+                </div>`);
+            if (btn) { btn.disabled = true; btn.textContent = '✓ เพิ่มแล้ว'; }
+            document.getElementById('fndBatchCount').textContent = fndBatchSel.size;
+            entry.ready = loadFndBatchCard(entry);
+        }
+
+        function removeFndBatchProg(short) {
+            if (window._fndBatchRunning) return;
+            fndBatchSel.delete(short);
+            const card = fndBatchCard(short);
+            if (card) card.remove();
+            document.querySelectorAll(`#fndBatchResults button[data-short="${CSS.escape(short)}"]`).forEach(b => { b.disabled = false; b.textContent = '➕ เพิ่ม'; });
+            document.getElementById('fndBatchCount').textContent = fndBatchSel.size;
+        }
+
+        function clearFndBatchSel() {
+            [...fndBatchSel.keys()].forEach(removeFndBatchProg);
+            document.getElementById('fndBatchProgress').style.display = 'none';
+        }
+
+        // pkg_deps for one card, then its Table/View compare (same lists as the single popup)
+        async function loadFndBatchCard(entry) {
+            const card = fndBatchCard(entry.p.short);
+            if (!card) return;
+            const pkgBox = card.querySelector('.fnd-batch-pkg');
+            card.querySelector('.fnd-batch-obj').innerHTML = '';
+            entry.d = null;
+            pkgBox.innerHTML = fndMuted('⏳ ตรวจ PKG...');
+            try {
+                const d = await fndPost('pkg_deps', { program_name: entry.p.short, app_short_name: entry.p.app || 'XXCUST', src_profile: document.getElementById('fndBatchSrc').value });
+                entry.d = d;
+                if (!d.success) { pkgBox.innerHTML = fndWarn('ตรวจ PKG ไม่ได้: ' + (d.error || '')); return; }
+                if (!d.exec_method) { pkgBox.innerHTML = fndWarn('ไม่พบ Concurrent Program นี้ใน Source DB'); return; }
+                if (d.app_short_name) entry.p.app = d.app_short_name;
+                if (!entry.p.name) entry.p.name = d.user_program_name || entry.p.short;
+                if (!d.name) {
+                    pkgBox.innerHTML = d.exec_method === 'I' ? fndWarn(`⚠️ ไม่พบ PL/SQL object ของ ${d.exec_file || ''} ใน DB`) : fndMuted('ไม่ใช่ PL/SQL — ดึงเฉพาะ FNDLOAD / Template');
+                    return;
+                }
+                pkgBox.innerHTML = `<div style="font-weight:600; color:var(--accent-blue);">📦 ${escapeHtml(d.object_type)}: ${escapeHtml(d.owner)}.${escapeHtml(d.name)} <span style="font-weight:400; font-size:0.72rem; color:var(--text-muted);">(ดึง DDL .pks / .pkb อัตโนมัติ)</span></div>`
+                    + fndDepsListHtml(d.deps)
+                    + `<button class="btn btn-secondary" style="font-size:0.72rem; padding:2px 8px; margin-top:4px;" onclick="fndBatchRecheckObjs(this.closest('.fnd-batch-card').dataset.short)">🔍 ตรวจ Table / View ใหม่ (หลังเปลี่ยน PKG ที่ติ๊ก)</button>`;
+                await checkFndBatchObjs(entry);
+            } catch (e) {
+                pkgBox.innerHTML = fndWarn('ตรวจ PKG ไม่ได้: ' + e.message);
+            }
+        }
+
+        async function checkFndBatchObjs(entry) {
+            const card = fndBatchCard(entry.p.short);
+            if (!card || !entry.d || !entry.d.name) return;
+            const objBox = card.querySelector('.fnd-batch-obj');
+            const src = document.getElementById('fndBatchSrc').value, tgt = document.getElementById('fndBatchTgt').value;
+            if (!tgt || tgt === src) { objBox.innerHTML = fndWarn('เลือก Target DB ที่ไม่ใช่ Source เพื่อเทียบ Table / View'); return; }
+            objBox.innerHTML = fndMuted('⏳ เทียบ Table / View...');
+            try {
+                const pkgs = [`${entry.d.owner}.${entry.d.name}`, ...Array.from(card.querySelectorAll('.fnd-dep-pkg:checked')).map(c => c.value)];
+                const o = await fndPost('check_objects', { src_profile: src, tgt_profile: tgt, pkgs });
+                objBox.innerHTML = o.success ? fndObjectsHtml(o.objects) : fndWarn('ตรวจ Table / View ไม่ได้: ' + (o.error || ''));
+            } catch (e) {
+                objBox.innerHTML = fndWarn('ตรวจ Table / View ไม่ได้: ' + e.message);
+            }
+        }
+
+        function fndBatchRecheckObjs(short) {
+            const entry = fndBatchSel.get(short);
+            if (entry && !window._fndBatchRunning) entry.ready = checkFndBatchObjs(entry);
+        }
+
+        // Source changed -> redo PKG + Table/View for every card; Target changed -> redo Table/View only
+        function fndBatchRecheckAll(withPkg) {
+            if (window._fndBatchRunning) return;
+            fndBatchSel.forEach(entry => { entry.ready = withPkg ? loadFndBatchCard(entry) : checkFndBatchObjs(entry); });
+            if (withPkg) document.getElementById('fndBatchResults').innerHTML = fndMuted('เปลี่ยน Source แล้ว — ค้นหาใหม่');
+        }
+
+        let fndBatchProdPw = null;  // PROD password asked once per batch, reused by per-card retries
+
+        function fndBatchCtx() {
+            const ctx = {
+                src: document.getElementById('fndBatchSrc').value,
+                tgt: document.getElementById('fndBatchTgt').value,
+                outDir: document.getElementById('fndBatchOutDir').value.trim(),
+                mode: document.querySelector('input[name="fndBatchMode"]:checked').value,
+                backupFnd: document.getElementById('fndBatchBackupFnd').checked,
+                keepLocal: document.getElementById('fndBatchKeepLocal').checked
+            };
+            if (!ctx.tgt || ctx.tgt === ctx.src) { alert('กรุณาเลือก Target DB ที่ไม่ใช่ Source'); return null; }
+            return ctx;
+        }
+
+        function fndBatchLock(on) {
+            window._fndBatchRunning = on;
+            const btn = document.getElementById('btnFndBatchRun');
+            btn.disabled = on;
+            btn.textContent = on ? '⏳ กำลังทำ...' : '▶ เริ่ม';
+            document.querySelectorAll('#fndBatchSelected .fnd-batch-rm, #fndBatchSelected .fnd-batch-retry').forEach(b => b.disabled = on);
+        }
+
+        // generate -> download -> (deploy) for one card, using its own ticks. Returns 'ok' | 'fail' | 'stop' (stop = later programs would fail too)
+        async function runFndBatchOne(entry, ctx) {
+            const p = entry.p, card = fndBatchCard(p.short);
+            const st = card.querySelector('.fnd-batch-st'), det = card.querySelector('.fnd-batch-det');
+            const set = (html, color) => { st.innerHTML = html; st.style.color = color || 'var(--text-main)'; };
+            const retryBtn = `<button class="btn btn-secondary fnd-batch-retry" style="font-size:0.72rem; padding:2px 8px; margin-top:4px;" onclick="fndBatchRetry(this.closest('.fnd-batch-card').dataset.short)">🔄 ตรวจ Table / View / Sequence ใหม่ แล้วรันตัวนี้อีกครั้ง</button>`;
+            det.innerHTML = '';
+            card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            let stop = false;
+            try {
+                set('⏳ รอผลตรวจ PKG / Table...');
+                await entry.ready;
+                const d = entry.d;
+                if (!d || !d.success) throw new Error((d && d.error) || 'ตรวจ PKG ไม่สำเร็จ');
+                if (!d.exec_method) throw new Error(`ไม่พบ Concurrent Program นี้ใน ${ctx.src}`);
+                const extra = Array.from(card.querySelectorAll('.fnd-dep-pkg:checked')).map(c => c.value);
+                const syncObjs = Array.from(card.querySelectorAll('.fnd-sync-obj:checked')).map(c => JSON.parse(c.value));
+                const folderName = p.name || p.short;
+                const params = { program_name: p.short, app_short_name: p.app || 'XXCUST', ds_code: p.short, tmpl_code: p.short + '%',
+                                 src_profile: ctx.src, tgt_profile: ctx.tgt, output_dir: ctx.outDir, folder_name: folderName, extra_pkgs: extra, sync_objects: syncObjs };
+                set('⏳ 1/3 สร้างสคริปต์...');
+                const g = await fndPost('generate', params);
+                if (!g.success) throw new Error(g.error || 'สร้างสคริปต์ไม่สำเร็จ');
+                set('⏳ 2/3 ดึงไฟล์จากต้นทาง...');
+                const dl = await fndPost('run_download', params);
+                if (dl.error === 'NOT_CONFIGURED') { stop = true; throw new Error(`ยังไม่ได้ตั้งรหัส SSH ของ ${dl.host || ''} — ตั้งใน SFTP Explorer แล้วเริ่มใหม่ (หยุด Batch)`); }
+                if (!dl.success) throw new Error(dl.error || 'ดึงไฟล์ไม่สำเร็จ');
+                const folder = dl.folder || g.folder;
+                const info = `${(dl.files || []).length} ไฟล์ • PKG ${(d.name ? 1 : 0) + extra.length} • Table/View/Seq ${syncObjs.length}`;
+                det.innerHTML = `<a href="javascript:void(0)" data-p="${escapeHtml(folder)}" onclick="openGeneratedFolder(this.dataset.p)" style="font-size:0.72rem; color:var(--accent-blue);">📂 ${escapeHtml(folder)}</a>`;
+                if (ctx.mode !== 'upload') { set(`✓ ดึงไฟล์แล้ว (${info})`, '#6ee7b7'); return 'ok'; }
+
+                set('⏳ 3/3 Upload + Deploy...');
+                const body = () => ({ folder, target_profile: ctx.tgt, prod_password: fndBatchProdPw, backup_fnd: ctx.backupFnd, delete_after: !ctx.keepLocal });
+                let up = await fndPost('deploy_local', body());
+                if (up.need_confirm) {
+                    const pw = prompt(up.error + "\nกรอกรหัสผ่าน DB PROD (ใช้กับทุกตัวใน Batch นี้):");
+                    if (pw === null) { stop = true; throw new Error('ยกเลิก — ไม่ได้ Deploy ลง PROD (หยุด Batch)'); }
+                    fndBatchProdPw = pw;
+                    up = await fndPost('deploy_local', body());
+                    if (up.need_confirm) { fndBatchProdPw = null; throw new Error('รหัสผ่าน PROD ไม่ถูกต้อง — ไม่ได้ Deploy'); }
+                }
+                if (up.error === 'NOT_CONFIGURED') { stop = true; throw new Error(`ยังไม่ได้ตั้งรหัส SSH ของปลายทาง ${up.host || ''} (หยุด Batch)`); }
+                if (!up.success) throw new Error(up.error || 'Upload ไม่สำเร็จ');
+                const r = renderFndUploadResult(up, ctx.tgt, folderName);
+                set(r.ok ? `✓ Deploy สำเร็จ (${(up.results || []).length} รายการ)` : `⚠️ Deploy ไม่สำเร็จ ${r.failed} รายการ`, r.ok ? '#6ee7b7' : '#d29922');
+                if (up.local_deleted) det.innerHTML = '';
+                det.innerHTML += fndLocalNote(up, folder) + `<details ${r.ok ? '' : 'open'}><summary style="cursor:pointer; color:var(--text-muted); font-size:0.74rem;">รายละเอียด Deploy</summary>${r.html}</details>` + (r.ok ? '' : retryBtn);
+                return r.ok ? 'ok' : 'fail';
+            } catch (e) {
+                set('✗ ' + escapeHtml(e.message), '#fca5a5');
+                if (!stop) det.innerHTML += retryBtn;
+                return stop ? 'stop' : 'fail';
+            }
+        }
+
         async function runFndBatch() {
             if (window._fndBatchRunning) return;
-            const src = document.getElementById('fndBatchSrc').value;
-            const tgt = document.getElementById('fndBatchTgt').value;
-            const outDir = document.getElementById('fndBatchOutDir').value.trim();
-            const mode = document.querySelector('input[name="fndBatchMode"]:checked').value;
-            const withDeps = document.getElementById('fndBatchDeps').checked;
-            const withObjs = document.getElementById('fndBatchObjs').checked;
-            const progs = Array.from(document.querySelectorAll('#fndBatchList .fnd-batch-prog:checked')).map(c => JSON.parse(c.value));
-            document.getElementById('fndBatchExtra').value.split(/[\s,]+/).map(x => x.trim().toUpperCase()).filter(Boolean)
-                .forEach(x => { if (!progs.some(p => p.short === x)) progs.push({ short: x, name: '', app: '' }); });
-            if (!progs.length) { alert('กรุณาเลือกหรือพิมพ์ Concurrent Program อย่างน้อย 1 ตัว'); return; }
-            if (!tgt || tgt === src) { alert('กรุณาเลือก Target DB ที่ไม่ใช่ Source'); return; }
-            if (mode === 'upload' && !confirm(`Deploy ${progs.length} โปรแกรมจาก ${src}\nไปยัง ${tgt} เลยหรือไม่?\n\n(Table / View / PKG เดิมบนปลายทางจะถูก Backup ก่อนรันทุกครั้ง)`)) return;
+            const ctx = fndBatchCtx();
+            if (!ctx) return;
+            const entries = [...fndBatchSel.values()];
+            if (!entries.length) { alert('กรุณาค้นหาและเพิ่ม Concurrent Program อย่างน้อย 1 ตัว'); return; }
+            if (ctx.mode === 'upload' && !confirm(`Deploy ${entries.length} โปรแกรมจาก ${ctx.src}\nไปยัง ${ctx.tgt} เลยหรือไม่?\n\n(Table / View / PKG เดิมบนปลายทางจะถูก Backup ก่อนรันทุกครั้ง)`)) return;
 
-            const box = document.getElementById('fndBatchProgress');
-            box.style.display = 'block';
-            box.innerHTML = `<table style="width:100%; border-collapse:collapse;">` + progs.map((p, i) => `
-                <tr style="border-top:1px solid var(--panel-border);">
-                    <td style="padding:4px 6px; width:28px; color:var(--text-muted);">${i + 1}</td>
-                    <td style="padding:4px 6px;"><code>${escapeHtml(p.short)}</code><div style="font-size:0.72rem; color:var(--text-muted);">${escapeHtml(p.name)}</div></td>
-                    <td id="fndBatchSt${i}" style="padding:4px 6px; color:var(--text-muted);">รอคิว</td>
-                </tr>
-                <tr><td></td><td colspan="2" id="fndBatchDet${i}" style="padding:0 6px 4px;"></td></tr>`).join('') + `</table>
-                <div id="fndBatchSum" style="margin-top:8px; font-weight:600;"></div>`;
-            box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-
-            const post = (u, b) => fetch('/api/fndload/' + u, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) }).then(r => r.json());
-            const btn = document.getElementById('btnFndBatchRun');
-            window._fndBatchRunning = true;
-            btn.disabled = true;
-            btn.textContent = '⏳ กำลังทำ...';
-            let prodPw = null, okN = 0, stop = false;
-            for (let i = 0; i < progs.length && !stop; i++) {
-                const p = progs[i];
-                const st = document.getElementById(`fndBatchSt${i}`), det = document.getElementById(`fndBatchDet${i}`);
-                const set = (html, color) => { st.innerHTML = html; st.style.color = color || 'var(--text-main)'; };
-                try {
-                    set('⏳ ตรวจ PKG...');
-                    const d = await post('pkg_deps', { program_name: p.short, app_short_name: p.app || 'XXCUST', src_profile: src });
-                    if (!d.success) throw new Error(d.error || 'ตรวจ PKG ไม่สำเร็จ');
-                    if (!d.exec_method) throw new Error(`ไม่พบ Concurrent Program นี้ใน ${src}`);
-                    const folderName = p.name || d.user_program_name || p.short;
-                    const pkgs = d.name ? [`${d.owner}.${d.name}`] : [];
-                    const extra = withDeps ? d.deps.filter(x => !x.standard).map(x => `${x.owner}.${x.name}`) : [];
-                    let syncObjs = [];
-                    if (withObjs && pkgs.length) {
-                        set('⏳ เทียบ Table / View...');
-                        const o = await post('check_objects', { src_profile: src, tgt_profile: tgt, pkgs: [...pkgs, ...extra] });
-                        if (o.success) syncObjs = o.objects.filter(x => !x.standard && x.status !== 'SAME').map(x => ({ owner: x.owner, name: x.name, type: x.type, synonym: x.synonym }));
-                    }
-                    const params = { program_name: p.short, app_short_name: d.app_short_name || p.app || 'XXCUST', ds_code: p.short, tmpl_code: p.short + '%',
-                                     src_profile: src, tgt_profile: tgt, output_dir: outDir, folder_name: folderName, extra_pkgs: extra, sync_objects: syncObjs };
-                    set('⏳ 1/3 สร้างสคริปต์...');
-                    const g = await post('generate', params);
-                    if (!g.success) throw new Error(g.error || 'สร้างสคริปต์ไม่สำเร็จ');
-                    set('⏳ 2/3 ดึงไฟล์จากต้นทาง...');
-                    const dl = await post('run_download', params);
-                    if (dl.error === 'NOT_CONFIGURED') { stop = true; throw new Error(`ยังไม่ได้ตั้งรหัส SSH ของ ${dl.host || ''} — ตั้งใน SFTP Explorer แล้วเริ่มใหม่ (หยุด Batch)`); }
-                    if (!dl.success) throw new Error(dl.error || 'ดึงไฟล์ไม่สำเร็จ');
-                    const folder = dl.folder || g.folder;
-                    const info = `${(dl.files || []).length} ไฟล์ • PKG ${pkgs.length + extra.length} • Table/View ${syncObjs.length}`;
-                    det.innerHTML = `<a href="javascript:void(0)" data-p="${escapeHtml(folder)}" onclick="openGeneratedFolder(this.dataset.p)" style="font-size:0.72rem; color:var(--accent-blue);">📂 ${escapeHtml(folder)}</a>`;
-                    if (mode !== 'upload') { set(`✓ ดึงไฟล์แล้ว (${info})`, '#6ee7b7'); okN++; continue; }
-
-                    set('⏳ 3/3 Upload + Deploy...');
-                    let up = await post('deploy_local', { folder, target_profile: tgt, prod_password: prodPw });
-                    if (up.need_confirm) {
-                        const pw = prompt(up.error + "\nกรอกรหัสผ่าน DB PROD (ใช้กับทุกตัวใน Batch นี้):");
-                        if (pw === null) { stop = true; throw new Error('ยกเลิก — ไม่ได้ Deploy ลง PROD (หยุด Batch)'); }
-                        prodPw = pw;
-                        up = await post('deploy_local', { folder, target_profile: tgt, prod_password: prodPw });
-                        if (up.need_confirm) { prodPw = null; throw new Error('รหัสผ่าน PROD ไม่ถูกต้อง — ไม่ได้ Deploy'); }
-                    }
-                    if (up.error === 'NOT_CONFIGURED') { stop = true; throw new Error(`ยังไม่ได้ตั้งรหัส SSH ของปลายทาง ${up.host || ''} (หยุด Batch)`); }
-                    if (!up.success) throw new Error(up.error || 'Upload ไม่สำเร็จ');
-                    const r = renderFndUploadResult(up, tgt, folderName);
-                    set(r.ok ? `✓ Deploy สำเร็จ (${(up.results || []).length} รายการ)` : `⚠️ Deploy ไม่สำเร็จ ${r.failed} รายการ`, r.ok ? '#6ee7b7' : '#d29922');
-                    det.innerHTML += `<details><summary style="cursor:pointer; color:var(--text-muted); font-size:0.74rem;">รายละเอียด Deploy</summary>${r.html}</details>`;
-                    if (r.ok) okN++;
-                } catch (e) {
-                    set('✗ ' + escapeHtml(e.message), '#fca5a5');
-                }
+            const sum = document.getElementById('fndBatchProgress');
+            fndBatchProdPw = null;
+            fndBatchLock(true);
+            entries.forEach(e => { const c = fndBatchCard(e.p.short); c.querySelector('.fnd-batch-st').innerHTML = fndMuted('รอคิว'); c.querySelector('.fnd-batch-det').innerHTML = ''; });
+            sum.style.display = 'none';
+            let okN = 0, stopped = false;
+            for (const entry of entries) {
+                const res = await runFndBatchOne(entry, ctx);
+                if (res === 'ok') okN++;
+                if (res === 'stop') { stopped = true; break; }
             }
-            document.getElementById('fndBatchSum').innerHTML = `เสร็จ ${okN} / ${progs.length} ตัว` + (stop ? ' <span style="color:#fca5a5;">(หยุดกลางทาง)</span>' : '');
-            showToast(`FNDLOAD Batch: สำเร็จ ${okN} / ${progs.length} ตัว`, 5000, okN === progs.length ? 'success' : 'error');
-            window._fndBatchRunning = false;
-            btn.disabled = false;
-            btn.textContent = '▶ เริ่ม';
+            sum.style.display = 'block';
+            sum.innerHTML = `<b>เสร็จ ${okN} / ${entries.length} ตัว</b>` + (stopped ? ' <span style="color:#fca5a5;">(หยุดกลางทาง)</span>' : '')
+                + (okN < entries.length ? ' <span style="color:var(--text-muted);">— กด 🔄 ในการ์ดที่ไม่สำเร็จเพื่อตรวจใหม่แล้วรันซ้ำเฉพาะตัวนั้น</span>' : '');
+            sum.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            showToast(`FNDLOAD Batch: สำเร็จ ${okN} / ${entries.length} ตัว`, 5000, okN === entries.length ? 'success' : 'error');
+            fndBatchLock(false);
+        }
+
+        // Re-check Table / View / Sequence for one card (picks up objects created or still missing), then run it again
+        async function fndBatchRetry(short) {
+            const entry = fndBatchSel.get(short);
+            if (!entry || window._fndBatchRunning) return;
+            const ctx = fndBatchCtx();
+            if (!ctx) return;
+            if (ctx.mode === 'upload' && !confirm(`ตรวจใหม่แล้ว Deploy ${short} ไปยัง ${ctx.tgt} อีกครั้งหรือไม่?`)) return;
+            fndBatchLock(true);
+            try {
+                const card = fndBatchCard(short);
+                card.querySelector('.fnd-batch-st').innerHTML = fndMuted('⏳ ตรวจ Table / View / Sequence ใหม่...');
+                await entry.ready;
+                entry.ready = entry.d && entry.d.name ? checkFndBatchObjs(entry) : loadFndBatchCard(entry);
+                await entry.ready;
+                await runFndBatchOne(entry, ctx);
+            } finally {
+                fndBatchLock(false);
+            }
         }
 
         function openExportModal() {
@@ -8886,10 +9145,22 @@ LOG="$WORK_DIR/upload_$(date +%Y%m%d_%H%M%S).log"
 DB_USER="{tgt_user}"
 DB_PASS="{tgt_pass}"
 TGT_JDBC="{tgt_jdbc}"
+BACKUP_FND=1   # 1 = download the target's existing CON / XML / Request Group before uploading (missing on target = empty ldt, skipped)
 
 echo "============================================================" | tee "$LOG"
 echo " UPLOAD (Direct File Method) — $(date '+%Y-%m-%d %H:%M:%S')" | tee -a "$LOG"
 echo "============================================================" | tee -a "$LOG"
+if [ "$BACKUP_FND" = "1" ]; then
+  FND_BK="$WORK_DIR/_fnd_backup_$(date +%Y%m%d_%H%M%S)"
+  mkdir -p "$FND_BK" && cd "$FND_BK"
+  echo "[BACKUP] FND ปลายทาง -> $FND_BK" | tee -a "$LOG"
+  FNDLOAD $DB_USER/$DB_PASS 0 Y DOWNLOAD $FND_TOP/patch/115/import/afcpprog.lct CON_{prog}.ldt PROGRAM CONCURRENT_PROGRAM_NAME={prog} APPLICATION_SHORT_NAME={app_short} >> "$LOG" 2>&1
+  FNDLOAD $DB_USER/$DB_PASS 0 Y DOWNLOAD $XDO_TOP/patch/115/import/xdotmpl.lct XML_{ds_code}.ldt XDO_DS_DEFINITIONS APPLICATION_SHORT_NAME={app_short} DATA_SOURCE_CODE={ds_code} >> "$LOG" 2>&1
+  FNDLOAD $DB_USER/$DB_PASS 0 Y DOWNLOAD $FND_TOP/patch/115/import/afcpreqg.lct GROUP_{prog}.ldt REQUEST_GROUP REQUEST_GROUP_NAME='' APPLICATION_SHORT_NAME={app_short} REQUEST_GROUP_UNIT UNIT_NAME={prog} >> "$LOG" 2>&1
+  rm -f L*.log O*.out 2>/dev/null
+  ls -l "$FND_BK" | tee -a "$LOG"
+  cd "$WORK_DIR"
+fi
 {PKG_UPLOAD_SH.replace('@@COLTYPE@@', _COL_TYPE_SQL)}
 echo "[1/4] Concurrent Program (afcpprog)..." | tee -a "$LOG"
 for f in "$WORK_DIR"/CON_*.ldt; do
@@ -8964,7 +9235,7 @@ PKG_UPLOAD_SH = r'''
 TS=$(date +%Y%m%d_%H%M%S)
 BK_DIR="$WORK_DIR/_before_compile"
 echo "[TABLE/VIEW] Table / View (backup -> run)..." | tee -a "$LOG"
-for f in "$WORK_DIR"/TBL_*.sql "$WORK_DIR"/VW_*.sql; do
+for f in "$WORK_DIR"/SEQ_*.sql "$WORK_DIR"/TBL_*.sql "$WORK_DIR"/VW_*.sql; do
   [ -e "$f" ] || continue
   mkdir -p "$BK_DIR"
   set -- $(head -1 "$f"); otype="$3"; full="$4"; owner="${full%%.*}"; obj="${full#*.}"
@@ -9116,7 +9387,7 @@ def _find_pkg_deps(cursor, owner, name):
 _SKIP_OWNERS = ('SYS', 'SYSTEM', 'PUBLIC', 'XDB', 'CTXSYS', 'MDSYS')
 
 def _find_pkg_objects(cursor, pkgs):
-    """Tables/views referenced by the given 'OWNER.NAME' PL/SQL objects (synonyms resolved, DB links skipped).
+    """Tables/views/sequences referenced by the given 'OWNER.NAME' PL/SQL objects (synonyms resolved, DB links skipped).
     Returns [{owner, name, type, synonym, standard}] — standard = registered in fnd_tables/fnd_views or a product schema."""
     seen, out = set(), []
     for full in pkgs:
@@ -9124,7 +9395,7 @@ def _find_pkg_objects(cursor, pkgs):
         cursor.execute("""
             SELECT DISTINCT referenced_owner, referenced_name, referenced_type FROM all_dependencies
             WHERE owner = :o AND name = :n AND referenced_link_name IS NULL
-              AND referenced_type IN ('TABLE', 'VIEW', 'SYNONYM')
+              AND referenced_type IN ('TABLE', 'VIEW', 'SEQUENCE', 'SYNONYM')
         """, o=p_owner or 'APPS', n=p_name)
         for r_owner, r_name, r_type in cursor.fetchall():
             syn = None
@@ -9134,7 +9405,7 @@ def _find_pkg_objects(cursor, pkgs):
                 s = cursor.fetchone()
                 if not s: continue
                 syn, (r_owner, r_name) = f"{r_owner}.{r_name}", s
-                cursor.execute("SELECT object_type FROM all_objects WHERE owner = :o AND object_name = :n AND object_type IN ('TABLE', 'VIEW')",
+                cursor.execute("SELECT object_type FROM all_objects WHERE owner = :o AND object_name = :n AND object_type IN ('TABLE', 'VIEW', 'SEQUENCE')",
                                o=r_owner, n=r_name)
                 t = cursor.fetchone()
                 if not t: continue
@@ -9186,6 +9457,14 @@ def _table_ddl(cursor, owner, name):
         cols.append(f'  CONSTRAINT "{pk[0][0]}" PRIMARY KEY (' + ", ".join(f'"{r[1]}"' for r in pk) + ')')
     return f'CREATE TABLE "{owner}"."{name}" (\n' + ",\n".join(cols) + "\n)"
 
+def _seq_ddl(cursor, owner, name):
+    """CREATE SEQUENCE with the source settings, starting fresh at MINVALUE (MAXVALUE when descending)."""
+    cursor.execute("""SELECT min_value, max_value, increment_by, cycle_flag, order_flag, cache_size FROM all_sequences
+                      WHERE sequence_owner = :o AND sequence_name = :n""", o=owner, n=name)
+    mn, mx, inc, cyc, ordr, cache = cursor.fetchone()
+    return (f'CREATE SEQUENCE "{owner}"."{name}" MINVALUE {mn} MAXVALUE {mx} INCREMENT BY {inc} START WITH {mn if inc > 0 else mx} '
+            f'{f"CACHE {cache}" if cache else "NOCACHE"} {"CYCLE" if cyc == "Y" else "NOCYCLE"} {"ORDER" if ordr == "Y" else "NOORDER"}')
+
 def _view_ddl(cursor, owner, name):
     cols = ", ".join(f'"{c}"' for c, _ in _obj_columns(cursor, owner, name))
     return f'CREATE OR REPLACE FORCE VIEW "{owner}"."{name}" ({cols}) AS\n{_view_text(cursor, owner, name)}'
@@ -9193,7 +9472,7 @@ def _view_ddl(cursor, owner, name):
 def _compare_obj(src, tgt, obj):
     """Compare one table/view between source and target cursors. Returns obj + {status: SAME|MISSING|DIFF, diffs, add, modify}."""
     owner, name, otype = obj["owner"], obj["name"], obj["type"]
-    tgt.execute("SELECT object_type FROM all_objects WHERE owner = :o AND object_name = :n AND object_type IN ('TABLE', 'VIEW')",
+    tgt.execute("SELECT object_type FROM all_objects WHERE owner = :o AND object_name = :n AND object_type IN ('TABLE', 'VIEW', 'SEQUENCE')",
                 o=owner, n=name)
     t = tgt.fetchone()
     res = dict(obj, status="SAME", diffs=[], add=[], modify=[])
@@ -9202,6 +9481,8 @@ def _compare_obj(src, tgt, obj):
         return res
     if t[0] != otype:
         res.update(status="DIFF", diffs=[f"ปลายทางเป็น {t[0]} แต่ต้นทางเป็น {otype}"])
+        return res
+    if otype == 'SEQUENCE':  # exists on target = fine (its current value is the target's own business)
         return res
     s_cols, t_cols = _obj_columns(src, owner, name), dict(_obj_columns(tgt, owner, name))
     for c, sig in s_cols:
@@ -9225,6 +9506,8 @@ def _sync_obj_statements(src, cmp):
     q = f'"{owner}"."{name}"'
     if otype == 'VIEW':
         stmts = [_view_ddl(src, owner, name)]
+    elif otype == 'SEQUENCE':
+        stmts = [_seq_ddl(src, owner, name)]
     elif cmp["status"] == "MISSING":
         stmts = [_table_ddl(src, owner, name)]
     else:
@@ -9254,7 +9537,7 @@ def _write_object_sync_scripts(src_key, tgt_key, objs, out_dir, db_sess, profs):
                 if cmp["type"] == 'TABLE' and cmp["status"] == "DIFF" and not (cmp["add"] or cmp["modify"]):
                     logs.append(f"  -- {obj['name']}: ต่างกันแต่สร้างสคริปต์อัตโนมัติไม่ได้ ({'; '.join(cmp['diffs'])})"); continue
                 stmts = _sync_obj_statements(sc, cmp)
-                fname = f"{'VW' if obj['type'] == 'VIEW' else 'TBL'}_{obj['name']}.sql"
+                fname = f"{ {'VIEW': 'VW', 'SEQUENCE': 'SEQ'}.get(obj['type'], 'TBL') }_{obj['name']}.sql"
                 with open(os.path.join(out_dir, fname), "w", encoding="utf-8", newline="\n") as f:
                     f.write(f"-- {cmp['status']} {obj['type']} {obj['owner']}.{obj['name']} ({src_key} -> {tgt_key})\n")
                     for d in cmp["diffs"]: f.write(f"--   {d}\n")
@@ -9313,10 +9596,71 @@ def _write_plsql_source(cursor, owner, name, obj_type, out_dir, log_lines, downl
 _PLSQL_HEAD_RE = re.compile(r'^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:NON)?EDITIONABLE\s+)?'
                             r'(PACKAGE\s+BODY|PACKAGE|PROCEDURE|FUNCTION)\s+(?:"?\w+"?\s*\.\s*)?"?([\w$#]+)"?', re.I)
 
-_SYNC_HEAD_RE = re.compile(r'^--\s*\w+\s+(TABLE|VIEW)\s+([\w$#]+)\.([\w$#]+)', re.M)
+_FND_BACKUP_STEP = "[0/7] Backup FND ปลายทาง (ก่อน Upload)"
+
+def _backup_target_fnd(run, sftp, profile, alias, prog, ds_code, tmpl_code, remote_tmp, apps_pass, tgt_jdbc, log):
+    """Download what the target already has for this program (CON / request group / XML definition / templates) into
+    <backup repo>/<ALIAS>/<program name>/_before_fndload/<ts>/ and push. Returns (ok, result).
+    Nothing on the target -> skipped (ok). Exists but CON/XML didn't come back -> not ok, caller must abort before uploading."""
+    import datetime
+    log.append(f"\n--- {_FND_BACKUP_STEP} ---")
+    conn = create_connection(profile["host"], profile["port"], profile.get("service_name"), profile.get("sid"),
+                             profile["user"], profile["password"])
+    cur = conn.cursor()
+    try:
+        cur.execute("""SELECT a.application_short_name, t.user_concurrent_program_name
+                       FROM fnd_concurrent_programs p, fnd_application a, fnd_concurrent_programs_tl t
+                       WHERE p.concurrent_program_name = :p AND a.application_id = p.application_id
+                         AND t.application_id = p.application_id AND t.concurrent_program_id = p.concurrent_program_id AND t.language = 'US'""", p=prog)
+        con = cur.fetchone()
+        cur.execute("SELECT application_short_name FROM xdo_ds_definitions_b WHERE data_source_code = :d", d=ds_code)
+        ds = cur.fetchone()
+        cur.execute("""SELECT DISTINCT lob_type, application_short_name, lob_code, language, territory FROM xdo_lobs
+                       WHERE (lob_code = :d OR lob_code LIKE :t) AND lob_type IN ('TEMPLATE_SOURCE', 'TEMPLATE', 'DATA_TEMPLATE')""", d=ds_code, t=tmpl_code)
+        lobs = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+    if not (con or ds or lobs):
+        log.append(f"  -- ไม่พบ {prog} บนปลายทาง (Program / Data Definition / Template) — ข้าม backup")
+        return True, {"step": _FND_BACKUP_STEP, "file": prog, "ok": True, "note": "ไม่พบบนปลายทาง — ข้าม (โปรแกรมใหม่)"}
+
+    bdir = f"{remote_tmp}/_fnd_backup"
+    fnd = f"cd {bdir} && $FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y DOWNLOAD"
+    run(f"mkdir -p {bdir}")
+    if con:
+        run(f"{fnd} $FND_TOP/patch/115/import/afcpprog.lct CON_{prog}.ldt PROGRAM CONCURRENT_PROGRAM_NAME={prog} APPLICATION_SHORT_NAME={con[0]}")
+        run(f"{fnd} $FND_TOP/patch/115/import/afcpreqg.lct GROUP_{prog}.ldt REQUEST_GROUP REQUEST_GROUP_NAME='' "
+            f"APPLICATION_SHORT_NAME={con[0]} REQUEST_GROUP_UNIT UNIT_NAME={prog}")
+    if ds:
+        run(f"{fnd} $XDO_TOP/patch/115/import/xdotmpl.lct XML_{ds_code}.ldt XDO_DS_DEFINITIONS APPLICATION_SHORT_NAME={ds[0]} DATA_SOURCE_CODE={ds_code}")
+    for lob_type, app_sn, code, lang, terr in lobs:
+        run(f"cd {bdir} && java oracle.apps.xdo.oa.util.XDOLoader DOWNLOAD -DB_USERNAME apps -DB_PASSWORD {apps_pass} "
+            f"-JDBC_CONNECTION '{tgt_jdbc}' -LOB_TYPE {lob_type} -APPS_SHORT_NAME {app_sn} -LOB_CODE {code} -LANGUAGE {lang} -TERRITORY {terr}", timeout=180)
+    run(f"cd {bdir} && rm -f L*.log O*.out 2>/dev/null")
+
+    folder = re.sub(r'[\\/:*?"<>|]+', '_', (con[1] if con else '') or prog).strip(' .')
+    rel = os.path.join(alias or "UNKNOWN_SITE", folder, "_before_fndload", f"{datetime.datetime.now():%Y%m%d_%H%M%S}")
+    local = os.path.join(PLSQL_BACKUP_REPO, rel)
+    os.makedirs(local, exist_ok=True)
+    got = []
+    for name in sftp.listdir(bdir):
+        sftp.get(f"{bdir}/{name}", os.path.join(local, name))
+        if os.path.getsize(os.path.join(local, name)):
+            got.append(name)
+    missing = ([f"CON_{prog}.ldt"] if con and f"CON_{prog}.ldt" not in got else []) + \
+              ([f"XML_{ds_code}.ldt"] if ds and f"XML_{ds_code}.ldt" not in got else [])
+    if missing:
+        log.append(f"  ✗ Backup ไม่ครบ — ไม่ได้ไฟล์ {', '.join(missing)} (ไฟล์ที่ได้อยู่ที่ {local})")
+        return False, {"step": _FND_BACKUP_STEP, "file": prog, "ok": False, "note": f"Backup ไม่ครบ ({', '.join(missing)}) — ยกเลิกการอัปโหลด"}
+    note = _git_push_backup(rel, f"Backup {alias} FND {prog} before FNDLOAD upload {datetime.datetime.now():%Y-%m-%d %H:%M:%S}")
+    log.append(f"  🛡️ Backup FND {len(got)} ไฟล์ ({', '.join(got)}) — {note}")
+    return True, {"step": _FND_BACKUP_STEP, "file": prog, "ok": True, "note": f"{len(got)} ไฟล์ → {local}"}
+
+_SYNC_HEAD_RE = re.compile(r'^--\s*\w+\s+(TABLE|VIEW|SEQUENCE)\s+([\w$#]+)\.([\w$#]+)', re.M)
 
 def _run_sync_sql_files(profile, alias, sync_files, results):
-    """Run TBL_*.sql then VW_*.sql [(filename, text)] on the target. Each existing object's DDL is backed up first
+    """Run SEQ_*.sql, TBL_*.sql then VW_*.sql [(filename, text)] on the target. Each existing object's DDL is backed up first
     (backup fails = file skipped). Statements are separated by '/' lines. Returns log lines."""
     log = []
     try:
@@ -9327,7 +9671,7 @@ def _run_sync_sql_files(profile, alias, sync_files, results):
             results.append({"step": "[4/7] Table / View", "file": fname, "ok": False, "note": "เชื่อมต่อ DB ไม่ได้"})
         return [f"  ✗ เชื่อมต่อ DB ไม่ได้: {e}"]
     cur = conn.cursor()
-    for prefix, step in (("TBL_", "[4/7] Table (Create / Alter)"), ("VW_", "[5/7] View (Create or Replace)")):
+    for prefix, step in (("SEQ_", "[4/7] Sequence (Create)"), ("TBL_", "[4/7] Table (Create / Alter)"), ("VW_", "[5/7] View (Create or Replace)")):
         group = sorted(x for x in sync_files if x[0].upper().startswith(prefix))
         if not group: continue
         log.append(f"\n--- {step} บน {alias} ---")
@@ -9340,25 +9684,28 @@ def _run_sync_sql_files(profile, alias, sync_files, results):
             try:  # backup current target DDL
                 cur.execute("SELECT COUNT(*) FROM all_objects WHERE owner = :o AND object_name = :n AND object_type = :t", o=owner, n=name, t=otype)
                 if cur.fetchone()[0]:
-                    ddl = _view_ddl(cur, owner, name) if otype == 'VIEW' else _table_ddl(cur, owner, name)
+                    ddl = {'VIEW': _view_ddl, 'SEQUENCE': _seq_ddl}.get(otype, _table_ddl)(cur, owner, name)
                     log.append(f"  🛡️ Backup {owner}.{name} ({otype}): " + _save_backup(cur, alias, name, otype, ddl + "\n/\n"))
             except Exception as be:
                 log.append(f"  ✗ ไม่สำเร็จ: {fname} — Backup ล้มเหลว ไม่ได้รัน: {be}")
                 results.append({"step": step, "file": fname, "ok": False, "note": "Backup ไม่ผ่าน — ไม่ได้รัน"}); continue
-            errs = []
+            errs, skipped = [], []
             for stmt in re.split(r'^\s*/\s*$', text, flags=re.M):
                 sql = "\n".join(l for l in stmt.strip().splitlines() if not l.lstrip().startswith('--')).strip()
                 if not sql: continue
                 try:
                     cur.execute(sql)
                 except Exception as se:
-                    errs.append(str(se).splitlines()[0])
+                    msg = str(se).splitlines()[0]
+                    # already there from an earlier deploy (name in use / column exists) -> re-deploying is safe
+                    (skipped if re.search(r'ORA-0(0955|1430)', msg) else errs).append(msg)
+            note = f"ข้าม {len(skipped)} คำสั่งที่มีอยู่แล้วบนปลายทาง" if skipped else ""
             if errs:
                 log.append(f"  ✗ ไม่สำเร็จ: {fname} — " + " | ".join(errs[:5]))
                 results.append({"step": step, "file": fname, "ok": False, "note": errs[0][:200]})
             else:
-                log.append(f"  ✓ สำเร็จ: {fname}")
-                results.append({"step": step, "file": fname, "ok": True, "note": ""})
+                log.append(f"  ✓ สำเร็จ: {fname}" + (f" — {note} ({' | '.join(skipped[:3])})" if skipped else ""))
+                results.append({"step": step, "file": fname, "ok": True, "note": note})
     cur.close()
     conn.close()
     return log
@@ -9444,6 +9791,41 @@ def _extract_pkg_files_to_dir(prog, app_short, out_dir, profile_key, db_sess, pr
     except Exception as e:
         log_lines.append(f"[WARN] DB PKG extraction step failed: {e}")
     return log_lines, downloaded, exec_method, exec_file
+
+@app.route("/api/fndload/search_programs", methods=["POST"])
+def api_fndload_search_programs():
+    """Concurrent programs on the given source DB whose user name or short name contains q (max 50)."""
+    global active_session_key, db_sessions
+    data = request.json or {}
+    q = (data.get("q") or "").strip().upper()
+    key = (data.get("src_profile") or "").strip() or active_session_key
+    if len(q) < 2:
+        return jsonify({"success": False, "error": "พิมพ์อย่างน้อย 2 ตัวอักษร"}), 400
+    try:
+        conn = _profile_conn(key, db_sessions, load_saved_profiles().get("profiles", {}))
+        if not conn:
+            return jsonify({"success": False, "error": f"Unknown profile: {key}"}), 400
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT * FROM (
+                SELECT p.concurrent_program_name, t.user_concurrent_program_name, a.application_short_name,
+                       DECODE(e.execution_method_code, 'I', 'PL/SQL', 'P', 'Oracle Reports', 'X', 'XML Publisher',
+                              'Q', 'SQL*Plus', 'H', 'Host', 'K', 'Java', e.execution_method_code) AS program_type,
+                       p.enabled_flag
+                FROM fnd_concurrent_programs p, fnd_concurrent_programs_tl t, fnd_application a, fnd_executables e
+                WHERE t.application_id = p.application_id AND t.concurrent_program_id = p.concurrent_program_id AND t.language = 'US'
+                  AND a.application_id = p.application_id
+                  AND e.application_id(+) = p.executable_application_id AND e.executable_id(+) = p.executable_id
+                  AND (UPPER(t.user_concurrent_program_name) LIKE :q OR p.concurrent_program_name LIKE :q)
+                ORDER BY p.enabled_flag DESC, t.user_concurrent_program_name
+            ) WHERE ROWNUM <= 50""", q=f"%{q}%")
+        rows = [{"program_short_name": r[0], "user_concurrent_program_name": r[1], "application_short_name": r[2],
+                 "program_type": r[3], "enabled": r[4] == 'Y'} for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return jsonify({"success": True, "programs": rows})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route("/api/fndload/pkg_deps", methods=["POST"])
 def api_fndload_pkg_deps():
@@ -10910,7 +11292,7 @@ def push_sql_command():
 @app.route("/api/fndload/upload_folder", methods=["POST"])
 def api_fndload_upload_folder():
     return _fndload_upload(request.form.get("target_profile", "").strip(), request.files.getlist("files"),
-                           request.form.get("prod_password"))
+                           request.form.get("prod_password"), request.form.get("backup_fnd") == "1")
 
 @app.route("/api/fndload/deploy_local", methods=["POST"])
 def api_fndload_deploy_local():
@@ -10924,20 +11306,36 @@ def api_fndload_deploy_local():
                    if os.path.isfile(os.path.join(folder, n)) and not n.lower().endswith((".log", ".zip")))
     handles = [open(os.path.join(folder, n), "rb") for n in names]
     try:
-        return _fndload_upload((data.get("target_profile") or "").strip(),
+        resp = _fndload_upload((data.get("target_profile") or "").strip(),
                                [FileStorage(stream=h, filename=n) for h, n in zip(handles, names)],
-                               data.get("prod_password"))
+                               data.get("prod_password"), bool(data.get("backup_fnd")))
     finally:
         for h in handles: h.close()
+    # "Don't keep files": remove the generated folder (has config.cfg) only when every deploy item succeeded
+    j = resp.get_json(silent=True) or {}
+    if data.get("delete_after") and j.get("success"):
+        if j.get("failed"):
+            j["local_kept_reason"] = "มีรายการไม่สำเร็จ — เก็บไฟล์ไว้เพื่อแก้แล้วอัปโหลดใหม่"
+        elif not os.path.isfile(os.path.join(folder, "config.cfg")):
+            j["local_kept_reason"] = "ไม่ใช่โฟลเดอร์ที่ JNavigator สร้าง (ไม่มี config.cfg) — ไม่ลบ"
+        else:
+            import shutil
+            try:
+                shutil.rmtree(folder)
+                j["local_deleted"] = True
+            except OSError as e:
+                j["local_kept_reason"] = f"ลบโฟลเดอร์ไม่ได้: {e.strerror or e}"
+        resp = jsonify(j)
+    return resp
 
-def _fndload_upload(target_profile, files, prod_password):
+def _fndload_upload(target_profile, files, prod_password, backup_fnd=False):
     global active_session_key, db_sessions
     if not target_profile or not files:
         return jsonify({"success": False, "error": "Missing profile or files"})
 
     # PROD guard: compiling PKG on PROD needs the target DB password (same rule as /api/plsql/compile)
     tgt = load_saved_profiles().get("profiles", {}).get(target_profile) or db_sessions.get(target_profile) or {}
-    has_plsql = any((f.filename or "").lower().endswith((".pks", ".pkb")) or re.match(r"(?i)(TBL|VW)_.*\.sql$", f.filename or "") for f in files)
+    has_plsql = any((f.filename or "").lower().endswith((".pks", ".pkb")) or re.match(r"(?i)(TBL|VW|SEQ)_.*\.sql$", f.filename or "") for f in files)
     if has_plsql and _is_prod_alias(tgt.get("alias") or target_profile) and prod_password != tgt.get("password"):
         return jsonify({"success": False, "need_confirm": True, "is_prod": True, "target": target_profile,
                         "error": f"⚠️ {target_profile} เป็น PROD — ต้องใส่รหัสผ่าน DB ก่อน Compile PKG / สร้าง Table-View"})
@@ -10964,12 +11362,15 @@ def _fndload_upload(target_profile, files, prod_password):
 
         app_short = "XXCUST"
         ds_code = ""
+        tmpl_code = ""
         prog_name = ""
         plsql_files = []
         sync_files = []
+        uploaded = []
 
         for f in files:
             if not f.filename: continue
+            uploaded.append(f.filename)
 
             if f.filename == 'config.cfg':
                 content_cfg = f.read().decode('utf-8', errors='ignore')
@@ -10980,6 +11381,7 @@ def _fndload_upload(target_profile, files, prod_password):
                         v = v.strip()
                         if k in ('APP_SHORT', 'APP_SHORT_NAME'): app_short = v
                         elif k in ('DS_CODE', 'DATA_SOURCE_CODE'): ds_code = v
+                        elif k == 'TMPL_CODE': tmpl_code = v
                         elif k in ('PROG_NAME', 'PROGRAM_NAMES', 'PROGRAM_NAME'): prog_name = v.split(',')[0].strip()
                 f.seek(0)
 
@@ -10994,7 +11396,7 @@ def _fndload_upload(target_profile, files, prod_password):
             if f.filename.lower().endswith(('.pks', '.pkb')):
                 with open(local_temp_path, encoding='utf-8', errors='replace') as pf:
                     plsql_files.append((f.filename, pf.read()))
-            elif re.match(r"(?i)(TBL|VW)_.*\.sql$", f.filename):
+            elif re.match(r"(?i)(TBL|VW|SEQ)_.*\.sql$", f.filename):
                 with open(local_temp_path, encoding='utf-8', errors='replace') as pf:
                     sync_files.append((f.filename, pf.read()))
             try:
@@ -11067,6 +11469,27 @@ def _fndload_upload(target_profile, files, prod_password):
             ds_code = prog_name
         if not ds_code:
             ds_code = "XXCUST_TMPL"
+
+        if backup_fnd:
+            # program from config.cfg, else from CON_[n_]<PROG>.ldt
+            bprog = prog_name or next((re.sub(r'^\d+_', '', n[4:-4]) for n in uploaded
+                                       if n.upper().startswith('CON_') and n.lower().endswith('.ldt')), '')
+            if not bprog:
+                log_lines.append(f"\n--- {_FND_BACKUP_STEP} ---\n  -- ไม่รู้ชื่อโปรแกรม (ไม่มี config.cfg / CON_*.ldt) — ข้าม backup")
+            else:
+                try:
+                    ok_b, res_b = _backup_target_fnd(run, sftp, p, p.get("alias") or target_profile, bprog.upper(), ds_code,
+                                                     tmpl_code or f"{bprog.upper()}%", remote_tmp, apps_pass, tgt_jdbc, log_lines)
+                except Exception as be:
+                    ok_b, res_b = False, {"step": _FND_BACKUP_STEP, "file": bprog, "ok": False, "note": f"Backup ล้มเหลว: {be}"[:200]}
+                    log_lines.append(f"  ✗ Backup ล้มเหลว: {be}")
+                results.append(res_b)
+                if not ok_b:  # nothing has been changed on the target yet
+                    ssh.exec_command(f"rm -rf {remote_tmp}")
+                    sftp.close()
+                    ssh.close()
+                    return jsonify({"success": False, "results": results, "log": log_lines,
+                                    "error": "Backup FND ปลายทางไม่สำเร็จ — ยกเลิกการอัปโหลด (ยังไม่ได้แก้อะไรบนปลายทาง)"})
 
         run_each("[1/7] Concurrent Program (FNDLOAD afcpprog)", "CON_*.ldt",
                  f"$FND_TOP/bin/FNDLOAD apps/{apps_pass} 0 Y UPLOAD $FND_TOP/patch/115/import/afcpprog.lct \"$f\" UPLOAD_MODE=REPLACE CUSTOM_MODE=FORCE")
