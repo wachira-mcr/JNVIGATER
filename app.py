@@ -83,6 +83,7 @@ LOGGED_ROUTES = {
     "/api/upload_template": "UPLOAD RTF",
     "/api/sftp/upload_rdf": "UPLOAD RDF",
     "/api/fndload/upload_folder": "UPLOAD FNDLOAD",
+    "/api/fndload/deploy_local": "UPLOAD FNDLOAD",
 }
 
 @app.after_request
@@ -102,11 +103,14 @@ def log_activity(response):
             obj = form.get("template_code", "")
         elif request.path == "/api/fndload/upload_folder":
             obj = ", ".join(f.filename for f in request.files.getlist("files") if f.filename)[:200]
+        elif request.path == "/api/fndload/deploy_local":
+            obj = os.path.basename(str(body.get("folder", "")).rstrip("\\/"))
         else:
             fl = request.files.get("file")
             obj = fl.filename if fl else ""
-        sess = db_sessions.get(form.get("target_profile") or active_session_key) or {}
-        alias = sess.get("alias") or (form.get("target_profile") or "UNKNOWN").split("@")[-1]
+        tgt_key = form.get("target_profile") or body.get("target_profile")
+        sess = db_sessions.get(tgt_key or active_session_key) or {}
+        alias = sess.get("alias") or (tgt_key or "UNKNOWN").split("@")[-1]
         entry = {
             "time": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "site": alias.split("_")[0].upper(),
@@ -114,8 +118,8 @@ def log_activity(response):
             "user": sess.get("user", ""),
             "action": action,
             "object": obj,
-            "status": "SUCCESS" if j.get("success") else "FAILED",
-            "detail": str(j.get("message") or j.get("error") or "")[:500],
+            "status": "SUCCESS" if j.get("success") and not j.get("failed") else "FAILED",
+            "detail": str(j.get("message") or j.get("error") or (f"ไม่สำเร็จ {j['failed']} รายการ" if j.get("failed") else ""))[:500],
         }
         with _activity_lock, open(ACTIVITY_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -3862,13 +3866,14 @@ HTML_TEMPLATE = r"""
 
                 <div id="fndPkgDeps" style="display:none; flex-shrink:0; font-size:0.8rem; border:1px solid var(--panel-border); border-radius:6px; padding:10px 12px; background:var(--bg-dark);"></div>
 
-                <div id="fndStatusMsg" style="display:none; flex-shrink:0; max-height:220px; overflow-y:auto; border-radius:6px; font-size:0.83rem;"></div>
+                <div id="fndStatusMsg" style="display:none; flex-shrink:0; border-radius:6px; font-size:0.83rem;"></div>
             </div>
             <div class="modal-footer" style="padding: 12px 20px; display:flex; align-items:center; justify-content:space-between; border-top:1px solid var(--panel-border); background:var(--bg-elevated); flex-shrink:0;">
                 <span id="fndNotice" style="font-size:0.75rem; color:var(--text-muted);">จะสร้างโฟลเดอร์แยกตามชื่อ Program ให้อัตโนมัติ</span>
                 <div style="display:flex; gap:8px;">
                     <button class="btn btn-secondary" onclick="closeFndLoadModal()">ยกเลิก</button>
                     <button class="btn btn-primary" id="btnSubmitFnd" onclick="submitFndLoadGenerate()">สร้างไฟล์ FNDLOAD</button>
+                    <button class="btn" id="btnFndAll" style="background:linear-gradient(135deg, #16a34a, #15803d); border:1px solid #4ade80; color:#fff; font-weight:600;" onclick="runFndDownloadAndUpload()" title="สร้างสคริปต์ → ดึงไฟล์จากต้นทาง → อัปโหลด + Deploy ปลายทาง">⚡ Download + Upload</button>
                 </div>
             </div>
         </div>
@@ -6306,6 +6311,40 @@ HTML_TEMPLATE = r"""
             }
         }
 
+        function fndUploadLogHtml(log) {
+            return (log || []).map(l => {
+                let color = '#94a3b8';
+                if (l.startsWith('[ERR]') || l.startsWith('[FATAL]') || l.includes('✗') || l.toLowerCase().includes('error') || l.toLowerCase().includes('failed')) color = '#fca5a5';
+                else if (l.includes('✓') || l.includes('🛡️')) color = '#6ee7b7';
+                else if (l.startsWith('$')) color = '#64748b';
+                else if (l.startsWith('---') || l.startsWith('\n---') || l.startsWith('===') || l.startsWith('\n===')) color = '#38bdf8';
+                return `<div style="font-family:monospace; font-size:0.72rem; color:${color}; line-height:1.4; white-space:pre-wrap;">${escapeHtml(l)}</div>`;
+            }).join('');
+        }
+
+        // Thai per-step summary of /api/fndload/upload_folder or /deploy_local -> { html, ok, failed }
+        function renderFndUploadResult(data, targetSite, folderName) {
+            const results = data.results || [];
+            const failed = results.filter(r => !r.ok).length;
+            const steps = [...new Set(results.map(r => r.step))];
+            const summaryHtml = steps.map(s => `
+                <div style="margin-top:6px; font-weight:600; color:#38bdf8;">${escapeHtml(s)}</div>` +
+                results.filter(r => r.step === s).map(r => `
+                <div style="padding-left:10px; color:${r.ok ? '#6ee7b7' : '#fca5a5'};">${r.ok ? '✓' : '✗'} <code>${escapeHtml(r.file)}</code>${r.note ? ` — <span style="color:#fca5a5;">${escapeHtml(r.note)}</span>` : ''}</div>`).join('')
+            ).join('') || '<div style="color:var(--text-muted);">ไม่พบไฟล์ที่ต้อง Deploy (CON_/XML_/.rtf/.pks/.pkb/GROUP_)</div>';
+            const ok = failed === 0;
+            const html = `
+                <div style="background:${ok ? 'rgba(63, 185, 80, 0.1)' : 'rgba(210, 153, 34, 0.12)'}; border:1px solid ${ok ? 'rgba(63, 185, 80, 0.3)' : 'rgba(210, 153, 34, 0.4)'}; color:${ok ? '#3fb950' : '#d29922'}; padding:12px; border-radius:6px;">
+                    <div style="font-weight:600; margin-bottom:4px;">${ok ? `อัปโหลดเข้า Server สำเร็จ! (${results.length} รายการ)` : `อัปโหลดเสร็จ แต่ไม่สำเร็จ ${failed} จาก ${results.length} รายการ`}</div>
+                    <div style="font-size:0.76rem; margin-bottom:6px; color:var(--text-muted);">Target Site: <b>${escapeHtml(targetSite)}</b> | โฟลเดอร์: <b>${escapeHtml(folderName)}</b></div>
+                    <div style="font-size:0.76rem; margin-bottom:8px;">${summaryHtml}</div>
+                    <details style="font-size:0.72rem;"><summary style="cursor:pointer; color:var(--text-muted);">ดู Log</summary>
+                        <div style="margin-top:6px; max-height:220px; overflow-y:auto; background:var(--bg-dark); padding:8px; border-radius:4px; border:1px solid var(--panel-border);">${fndUploadLogHtml(data.log)}</div>
+                    </details>
+                </div>`;
+            return { html, ok, failed };
+        }
+
         async function submitFndUpload(prodPassword) {
             if (!pendingFndFiles || pendingFndFiles.length === 0) return;
             const targetSite = document.getElementById('fndUploadTargetSite').value || getActiveSessionKey();
@@ -6346,7 +6385,7 @@ HTML_TEMPLATE = r"""
                 const data = await res.json();
 
                 if (data.need_confirm) {
-                    const pw = prompt(data.error + "\\nกรอกรหัสผ่าน DB PROD:");
+                    const pw = prompt(data.error + "\nกรอกรหัสผ่าน DB PROD:");
                     if (pw === null) {
                         statusMsg.innerHTML = `<div style="color:var(--warning); padding:8px;">ยกเลิกการอัปโหลด (ไม่ได้ Compile PKG ลง PROD)</div>`;
                         btnSubmit.disabled = false;
@@ -6356,37 +6395,14 @@ HTML_TEMPLATE = r"""
                     return submitFndUpload(pw);
                 }
 
-                const logHtml = (data.log || []).map(l => {
-                    let color = '#94a3b8';
-                    if (l.startsWith('[ERR]') || l.startsWith('[FATAL]') || l.includes('✗') || l.toLowerCase().includes('error') || l.toLowerCase().includes('failed')) color = '#fca5a5';
-                    else if (l.includes('✓') || l.includes('🛡️')) color = '#6ee7b7';
-                    else if (l.startsWith('$')) color = '#64748b';
-                    else if (l.startsWith('---') || l.startsWith('\\n---') || l.startsWith('===') || l.startsWith('\\n===')) color = '#38bdf8';
-                    return `<div style="font-family:monospace; font-size:0.72rem; color:${color}; line-height:1.4; white-space:pre-wrap;">${escapeHtml(l)}</div>`;
-                }).join('');
+                const logHtml = fndUploadLogHtml(data.log);
 
                 btnSubmit.disabled = false;
                 btnSubmit.textContent = '🚀 อัปโหลดเข้า Server';
 
                 if (data.success) {
-                    const results = data.results || [];
-                    const failed = results.filter(r => !r.ok).length;
-                    const steps = [...new Set(results.map(r => r.step))];
-                    const summaryHtml = steps.map(s => `
-                        <div style="margin-top:6px; font-weight:600; color:#38bdf8;">${escapeHtml(s)}</div>` +
-                        results.filter(r => r.step === s).map(r => `
-                        <div style="padding-left:10px; color:${r.ok ? '#6ee7b7' : '#fca5a5'};">${r.ok ? '✓' : '✗'} <code>${escapeHtml(r.file)}</code>${r.note ? ` — <span style="color:#fca5a5;">${escapeHtml(r.note)}</span>` : ''}</div>`).join('')
-                    ).join('') || '<div style="color:var(--text-muted);">ไม่พบไฟล์ที่ต้อง Deploy (CON_/XML_/.rtf/.pks/.pkb/GROUP_)</div>';
-                    const ok = failed === 0;
-                    statusMsg.innerHTML = `
-                        <div style="background:${ok ? 'rgba(63, 185, 80, 0.1)' : 'rgba(210, 153, 34, 0.12)'}; border:1px solid ${ok ? 'rgba(63, 185, 80, 0.3)' : 'rgba(210, 153, 34, 0.4)'}; color:${ok ? '#3fb950' : '#d29922'}; padding:12px; border-radius:6px;">
-                            <div style="font-weight:600; margin-bottom:4px;">${ok ? `อัปโหลดเข้า Server สำเร็จ! (${results.length} รายการ)` : `อัปโหลดเสร็จ แต่ไม่สำเร็จ ${failed} จาก ${results.length} รายการ`}</div>
-                            <div style="font-size:0.76rem; margin-bottom:6px; color:var(--text-muted);">Target Site: <b>${escapeHtml(targetSite)}</b> | โฟลเดอร์: <b>${escapeHtml(folderName)}</b></div>
-                            <div style="font-size:0.76rem; margin-bottom:8px;">${summaryHtml}</div>
-                            <details style="font-size:0.72rem;"><summary style="cursor:pointer; color:var(--text-muted);">ดู Log</summary>
-                                <div style="margin-top:6px; max-height:220px; overflow-y:auto; background:var(--bg-dark); padding:8px; border-radius:4px; border:1px solid var(--panel-border);">${logHtml}</div>
-                            </details>
-                        </div>`;
+                    const { html, ok, failed } = renderFndUploadResult(data, targetSite, folderName);
+                    statusMsg.innerHTML = html;
                     if (ok) showToast(`อัปโหลดและ Deploy โฟลเดอร์ ${folderName} สำเร็จ!`, 4000, 'success');
                     else showToast(`Deploy ไม่สำเร็จ ${failed} รายการ — ดูรายละเอียดในหน้าต่าง`, 5000, 'error');
                 } else if (data.error === 'NOT_CONFIGURED') {
@@ -6664,6 +6680,7 @@ HTML_TEMPLATE = r"""
                     btnSubmit.textContent = 'สร้างเรียบร้อย';
                     statusMsg.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
                     showToast(`สร้างไฟล์ FNDLOAD สำหรับ ${prog} สำเร็จ!`, 3000, 'success');
+                    return true;
                 } else {
                     statusMsg.innerHTML = `
                         <div style="background:rgba(248, 81, 73, 0.1); border:1px solid rgba(248, 81, 73, 0.3); color:#f85149; padding:10px; border-radius:6px;">
@@ -6764,6 +6781,7 @@ HTML_TEMPLATE = r"""
                         </div>`;
                     showToast(`ดึงไฟล์ ${data.files.length} ไฟล์จาก Server สำเร็จ!`, 4000, 'success');
                     statusMsg.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                    return true;
                 } else if (data.error === 'NOT_CONFIGURED') {
                     statusMsg.innerHTML = `
                         <div style="background:rgba(210, 153, 34, 0.1); border:1px solid rgba(210, 153, 34, 0.3); color:#d29922; padding:12px; border-radius:6px;">
@@ -6785,6 +6803,75 @@ HTML_TEMPLATE = r"""
             } finally {
                 btnSubmit.disabled = false;
                 btnSubmit.textContent = 'สร้างไฟล์ FNDLOAD';
+            }
+        }
+
+        // One click: generate scripts -> pull files from source server -> upload + deploy to target. Stops at the first failure.
+        async function runFndDownloadAndUpload() {
+            const src = document.getElementById('fndSrcDb').value;
+            const tgt = document.getElementById('fndTgtDb').value;
+            if (!tgt || tgt === src) { alert('กรุณาเลือก Target DB ที่ไม่ใช่ Source'); return; }
+            if (!confirm(`ดึงไฟล์จาก ${src}\nแล้วอัปโหลด + Deploy ไปยัง ${tgt} เลยหรือไม่?\n\n(Table / View / PKG เดิมบนปลายทางจะถูก Backup ก่อนรันทุกครั้ง)`)) return;
+            const btnAll = document.getElementById('btnFndAll');
+            btnAll.disabled = true;
+            try {
+                btnAll.textContent = '⏳ 1/3 สร้างสคริปต์...';
+                if (!(await submitFndLoadGenerate())) return;
+                btnAll.textContent = '⏳ 2/3 ดึงไฟล์จากต้นทาง...';
+                if (!(await runFndDownload())) return;
+                btnAll.textContent = '⏳ 3/3 อัปโหลด + Deploy...';
+                await deployFndToTarget(tgt);
+            } finally {
+                btnAll.disabled = false;
+                btnAll.textContent = '⚡ Download + Upload';
+            }
+        }
+
+        async function deployFndToTarget(tgt, prodPassword) {
+            const statusMsg = document.getElementById('fndStatusMsg');
+            const folder = window._lastFndFolder;
+            const folderName = (folder || '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
+            let box = document.getElementById('fndDeployBox');
+            if (!box) {
+                statusMsg.insertAdjacentHTML('beforeend', '<div id="fndDeployBox" style="margin-top:8px;"></div>');
+                box = document.getElementById('fndDeployBox');
+            }
+            box.innerHTML = `<div style="background:#1e3a5f; border:1px solid #3b82f6; color:#93c5fd; padding:12px; border-radius:6px;">
+                    <div style="font-weight:700; margin-bottom:6px;">⏳ กำลังอัปโหลด + Deploy ไปยัง ${escapeHtml(tgt)}...</div>
+                    <div style="font-size:0.78rem; color:#64748b;">Backup → Table / View → PKG → FNDLOAD อาจใช้เวลา 1-3 นาที กรุณาอย่าปิดหน้าต่างนี้</div>
+                </div>`;
+            box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            try {
+                const res = await fetch('/api/fndload/deploy_local', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folder: folder, target_profile: tgt, prod_password: prodPassword })
+                });
+                const data = await res.json();
+                if (data.need_confirm) {
+                    const pw = prompt(data.error + "\nกรอกรหัสผ่าน DB PROD:");
+                    if (pw === null) { box.innerHTML = '<div style="color:var(--warning); padding:8px;">ยกเลิกการอัปโหลด (ไม่ได้ Deploy ลง PROD)</div>'; return; }
+                    return deployFndToTarget(tgt, pw);
+                }
+                if (data.error === 'NOT_CONFIGURED') {
+                    box.innerHTML = `<div style="color:#d29922; padding:8px;">⚠️ ยังไม่ได้ตั้งค่ารหัสผ่าน SSH ของ Server ปลายทาง: <b>${escapeHtml(data.host || '')}</b></div>`;
+                    showSftpAuthPrompt(data.host || '', () => deployFndToTarget(tgt, prodPassword));
+                    return;
+                }
+                if (!data.success) {
+                    box.innerHTML = `<div style="background:rgba(248, 81, 73, 0.1); border:1px solid rgba(248, 81, 73, 0.3); color:#f85149; padding:12px; border-radius:6px;">
+                            <div style="font-weight:600; margin-bottom:4px;">❌ อัปโหลดไม่สำเร็จ: ${escapeHtml(data.error || 'Unknown Error')}</div>
+                            ${data.log && data.log.length ? `<details><summary style="cursor:pointer; color:var(--text-muted); font-size:0.72rem;">ดู Log</summary><div style="max-height:180px; overflow-y:auto; background:var(--bg-dark); padding:8px; border-radius:4px;">${fndUploadLogHtml(data.log)}</div></details>` : ''}
+                        </div>`;
+                    return;
+                }
+                const { html, ok, failed } = renderFndUploadResult(data, tgt, folderName);
+                box.innerHTML = html;
+                box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                if (ok) showToast(`Download + Upload ไป ${tgt} สำเร็จ!`, 4000, 'success');
+                else showToast(`Deploy ไม่สำเร็จ ${failed} รายการ — ดูรายละเอียดในหน้าต่าง`, 5000, 'error');
+            } catch (e) {
+                box.innerHTML = `<div style="color:#f85149; padding:8px;">❌ Network Error: ${escapeHtml(e.message)}</div>`;
             }
         }
 
@@ -10621,17 +10708,36 @@ def push_sql_command():
 
 @app.route("/api/fndload/upload_folder", methods=["POST"])
 def api_fndload_upload_folder():
-    global active_session_key, db_sessions
-    target_profile = request.form.get("target_profile", "").strip()
-    files = request.files.getlist("files")
+    return _fndload_upload(request.form.get("target_profile", "").strip(), request.files.getlist("files"),
+                           request.form.get("prod_password"))
 
+@app.route("/api/fndload/deploy_local", methods=["POST"])
+def api_fndload_deploy_local():
+    """Upload + deploy a folder already on this machine (e.g. what run_download just pulled) to the target site."""
+    from werkzeug.datastructures import FileStorage
+    data = request.json or {}
+    folder = (data.get("folder") or "").strip()
+    if not folder or not os.path.isdir(folder):
+        return jsonify({"success": False, "error": f"ไม่พบโฟลเดอร์: {folder}"})
+    names = sorted(n for n in os.listdir(folder)
+                   if os.path.isfile(os.path.join(folder, n)) and not n.lower().endswith((".log", ".zip")))
+    handles = [open(os.path.join(folder, n), "rb") for n in names]
+    try:
+        return _fndload_upload((data.get("target_profile") or "").strip(),
+                               [FileStorage(stream=h, filename=n) for h, n in zip(handles, names)],
+                               data.get("prod_password"))
+    finally:
+        for h in handles: h.close()
+
+def _fndload_upload(target_profile, files, prod_password):
+    global active_session_key, db_sessions
     if not target_profile or not files:
         return jsonify({"success": False, "error": "Missing profile or files"})
 
     # PROD guard: compiling PKG on PROD needs the target DB password (same rule as /api/plsql/compile)
     tgt = load_saved_profiles().get("profiles", {}).get(target_profile) or db_sessions.get(target_profile) or {}
     has_plsql = any((f.filename or "").lower().endswith((".pks", ".pkb")) or re.match(r"(?i)(TBL|VW)_.*\.sql$", f.filename or "") for f in files)
-    if has_plsql and _is_prod_alias(tgt.get("alias") or target_profile) and request.form.get("prod_password") != tgt.get("password"):
+    if has_plsql and _is_prod_alias(tgt.get("alias") or target_profile) and prod_password != tgt.get("password"):
         return jsonify({"success": False, "need_confirm": True, "is_prod": True, "target": target_profile,
                         "error": f"⚠️ {target_profile} เป็น PROD — ต้องใส่รหัสผ่าน DB ก่อน Compile PKG / สร้าง Table-View"})
 
